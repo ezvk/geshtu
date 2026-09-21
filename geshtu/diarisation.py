@@ -90,9 +90,26 @@ def segmente(compile_seg, audio):
     return sortie
 
 
-def empreinte(compile_emb, audio, debut, fin):
-    """Une empreinte pour un extrait. Forme FIGEE : le NPU refuse le reste."""
-    bout = audio[int(debut * 16000):int(fin * 16000)]
+def empreinte(compile_emb, audio, intervalles):
+    """Une empreinte, calculee UNIQUEMENT sur les trames ou cette voix parle.
+
+    ⚠️ ON NE PREND PAS L INTERVALLE PREMIERE-A-DERNIERE TRAME ACTIVE, et c est
+    la difference entre une diarisation qui marche et une qui ment.
+    La premiere version prenait ce span contigu : sur un expose a une voix
+    cela ne change rien, mais des que la conversation s entrelace le span
+    contient TOUS les interlocuteurs. Chaque empreinte devient alors la
+    moyenne de la salle, toutes se ressemblent, et le regroupement rend un
+    seul locuteur.
+    Mesure du 2026-09-21 sur une emission a quatre participants : un cluster
+    avalait 151,8 minutes sur 155, et AUCUN seuil ne donnait quatre -- le
+    balayage sautait de 6 a 3. Le defaut n etait pas le seuil.
+    On concatene donc les morceaux actifs et eux seuls.
+    """
+    morceaux = [audio[int(a * 16000):int(b * 16000)] for a, b in intervalles]
+    morceaux = [m for m in morceaux if len(m)]
+    if not morceaux:
+        return None
+    bout = np.concatenate(morceaux)
     if len(bout) < 16000:                                  # moins d une seconde
         return None
     feats = fbank(bout)
@@ -109,7 +126,7 @@ def empreinte(compile_emb, audio, debut, fin):
     return v / n if n else None
 
 
-def regroupe(vecteurs, seuil, cible=None):
+def regroupe(vecteurs, seuil, cible=None, interdits=()):
     """Regroupement agglomeratif, distance cosinus, liaison moyenne.
 
     ⚠️ VECTORISE, ET CE N EST PAS DE LA COQUETTERIE. La premiere version
@@ -125,15 +142,33 @@ def regroupe(vecteurs, seuil, cible=None):
     n = len(V)
     D = 1.0 - V @ V.T
     np.fill_diagonal(D, np.inf)
+
+    # ⚠️ DEUX VOIX SIMULTANEES NE PEUVENT PAS ETRE LA MEME PERSONNE, et c est
+    # la seule certitude dont on dispose. Sans elle, la liaison moyenne
+    # enchaine : sur une emission a quatre participants, un cluster avalait
+    # 151,9 minutes sur 155 et les trois autres se partageaient des miettes --
+    # alors que les empreintes discriminaient parfaitement (distance mediane
+    # 0,53, etalee de 0,17 a 1,02) et que la segmentation voyait 504 fenetres
+    # a deux voix. Ni le seuil ni les empreintes n etaient en cause : il
+    # manquait cette contrainte.
+    #
+    # On la propage a la fusion : un groupe herite des interdits de ses deux
+    # moities, sinon la contrainte s evapore des la premiere fusion.
+    tabou = np.zeros((n, n), dtype=bool)
+    for a, b in interdits:
+        tabou[a, b] = tabou[b, a] = True
     taille = np.ones(n)
     vivant = np.ones(n, dtype=bool)
     membres = {i: [i] for i in range(n)}
 
     while vivant.sum() > 1:
         sous = np.where(vivant)[0]
-        bloc = D[np.ix_(sous, sous)]
+        bloc = D[np.ix_(sous, sous)].copy()
+        bloc[tabou[np.ix_(sous, sous)]] = np.inf
         k = np.argmin(bloc)
         a, b = sous[k // len(sous)], sous[k % len(sous)]
+        if not np.isfinite(bloc.flat[k]):
+            break                       # il ne reste que des paires interdites
         # ⚠️ UN NOMBRE CONNU BAT TOUJOURS UN SEUIL. Quand l utilisateur
         # sait qu ils sont quatre, on fusionne jusqu a quatre, point. Le seuil
         # n est qu une facon de deviner ce nombre, et il devine mal.
@@ -149,6 +184,8 @@ def regroupe(vecteurs, seuil, cible=None):
         D[a, a] = np.inf
         taille[a] = na + nb
         membres[a] = membres[a] + membres[b]
+        tabou[a, :] |= tabou[b, :]
+        tabou[:, a] |= tabou[:, b]
         vivant[b] = False
         D[b, :] = np.inf
         D[:, b] = np.inf
@@ -190,25 +227,49 @@ def analyse(wav, modeles, seuil=0.9, device="NPU", locuteurs=None,
     pas_trame = 10.0 / fenetres[0][1].shape[0]
 
     extraits = []
-    for pos, actif in fenetres:
+    for nfen, (pos, actif) in enumerate(fenetres):
         base = pos / 16000
         for qui in range(3):
             on = actif[:, qui] > 0.5
             if on.sum() * pas_trame < 1.0:
                 continue
-            idx = np.where(on)[0]
-            extraits.append((base + idx[0] * pas_trame,
-                             base + (idx[-1] + 1) * pas_trame))
+            # ⚠️ LES INTERVALLES ACTIFS, UN PAR UN. Ce sont eux qui servent a
+            # l empreinte ; le span global ne sert qu a situer le tour dans
+            # le temps.
+            intervalles, debut_bloc = [], None
+            for t in range(len(on)):
+                if on[t] and debut_bloc is None:
+                    debut_bloc = t
+                elif not on[t] and debut_bloc is not None:
+                    intervalles.append((base + debut_bloc * pas_trame,
+                                        base + t * pas_trame))
+                    debut_bloc = None
+            if debut_bloc is not None:
+                intervalles.append((base + debut_bloc * pas_trame,
+                                    base + len(on) * pas_trame))
+            intervalles = [(a, min(b, duree)) for a, b in intervalles if b > a]
+            if not intervalles:
+                continue
+            extraits.append((intervalles[0][0], intervalles[-1][1],
+                             intervalles, nfen))
 
-    vecteurs, gardes = [], []
-    for debut, fin in extraits:
-        v = empreinte(cemb, audio, debut, min(fin, duree))
+    vecteurs, gardes, fenetre_de = [], [], []
+    for debut, fin, intervalles, nfen in extraits:
+        v = empreinte(cemb, audio, intervalles)
         if v is not None:
             vecteurs.append(v)
             gardes.append((debut, fin))
+            fenetre_de.append(nfen)
+
+    # Deux extraits issus de la MEME fenetre viennent de deux pistes locales
+    # distinctes, donc de deux personnes differentes.
+    interdits = [(i, j)
+                 for i in range(len(fenetre_de))
+                 for j in range(i + 1, len(fenetre_de))
+                 if fenetre_de[i] == fenetre_de[j]]
     if not vecteurs:
         return []
-    etiquette = regroupe(vecteurs, seuil, locuteurs)
+    etiquette = regroupe(vecteurs, seuil, locuteurs, interdits)
     trouves = max(etiquette.values()) + 1
     trace("%d excerpts, %d speakers, %.1f s on %s"
           % (len(vecteurs), trouves, time.time() - depart, device))
