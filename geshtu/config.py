@@ -28,12 +28,23 @@ device = "NPU"
 [engines.llm]
 endpoint = "http://localhost:8092/v3/chat/completions"
 model = "qwen3-8b"
-device = "NPU"
-# Measured ceiling on Intel NPU (Panther Lake, 2026-09-19): compilation is
-# refused above 8192 whatever the model -- Qwen3-8B and Mistral-7B fail at the
-# same 9216. It is a compiler constant, not a memory limit, so it cannot be
-# raised. Everything above this is chaptered instead.
-max_prompt = 8192
+# ⚠️ `device` DESCRIBES where this endpoint runs; it does not move anything.
+# Which accelerator serves a model is decided when the model server is
+# started. This field exists so the pipeline can reason about the endpoint's
+# limits, and so `geshtu models` can tell you what you are actually talking
+# to -- not so a line here can relocate a model.
+device = "GPU"
+# The prompt ceiling of this endpoint, in tokens. 0 means no known limit.
+#
+# ⚠️ IT IS A PROPERTY OF THE ACCELERATOR, NOT OF THE MODEL. Measured on an
+# Intel NPU (2026-09-19) by bisection: 8192 compiles in 75 s, 9216 is refused
+# in 15 s, and a model a gigabyte smaller fails at exactly the same point --
+# a compiler constant, not a memory limit. The same weights on the GPU
+# accepted 21 043 tokens and answered correctly (2026-09-21).
+#
+# An hour of speech is 10,000-15,000 tokens, so this number decides whether a
+# meeting is summarised whole or in chapters.
+max_prompt = 0
 
 [engines.embed]
 endpoint = "http://localhost:8096/v3/embeddings"

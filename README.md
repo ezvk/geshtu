@@ -58,9 +58,12 @@ the day the model invents something.
 | | |
 |---|---|
 | transcription, NPU | **40× realtime** — an hour of audio in ~90 s |
-| generation, NPU | ~20 tokens/s |
+| transcription latency, 15 s chunk | **0.5 s** — live is ~4% of the NPU |
+| generation, GPU | 25 tokens/s |
+| generation, NPU | 21 tokens/s |
 | prompt ceiling, NPU | **8192 tokens, hard** |
-| one-hour meeting, end to end | ~5 minutes, GPU idle |
+| prompt ceiling, GPU | 21,043 tokens accepted, no ceiling found |
+| one-hour meeting, end to end | ~5 minutes |
 
 **The ceiling is real and cannot be raised.** Found by bisection: 8192
 compiles in 75 s, 9216 is refused in 15 s, and so is 16384. A model a gigabyte
@@ -71,8 +74,12 @@ and not an optimisation.
 
 ## Engines
 
-Three roles, each pointed wherever you like. Moving a model from the NPU to
-the GPU is one line; nothing in the pipeline knows the difference.
+Three roles, each pointed wherever you like.
+
+⚠️ `device` **describes** where an endpoint runs; it does not move anything.
+Which accelerator serves a model is decided when the model server is started.
+The field exists so the pipeline can reason about that endpoint's limits and
+so `geshtu models` can tell you what you are actually talking to.
 
 ```toml
 [engines.asr]                                   # speech to text
@@ -83,8 +90,8 @@ device   = "NPU"
 [engines.llm]                                   # summaries
 endpoint   = "http://localhost:8092/v3/chat/completions"
 model      = "qwen3-8b"
-device     = "NPU"
-max_prompt = 8192
+device     = "GPU"
+max_prompt = 0                                  # 0 = no known ceiling
 
 [engines.embed]                                 # topic boundaries
 endpoint = "http://localhost:8096/v3/embeddings"
@@ -92,9 +99,27 @@ model    = "embeddings"
 device   = "CPU"
 ```
 
-Two accelerators, three roles: transcription and generation are sequential, so
-they share the NPU without contending, and the GPU is never touched — it stays
-available for whatever else you are doing.
+**Two accelerators, and each has a job.** Transcription is continuous and
+cheap, which is what an NPU is for: 40× realtime, and a 15-second chunk costs
+half a second, so live transcription is about 4% of it. Summarising is a burst
+that wants context, which is what the GPU is for.
+
+That split is not a preference. Measured on the same machine, same weights,
+one prompt of 21,043 tokens with a verifiable fact planted in the middle:
+
+| | result |
+|---|---|
+| GPU | found it, `finish_reason: stop` |
+| NPU | HTTP 400 — refused |
+
+The NPU ceiling is a compiler constant (see below), so an hour of speech never
+fitted and had to be summarised in chapters — which loses the callbacks that
+span a meeting. On the GPU it fits whole.
+
+Energy does not argue the other way, measured on battery over 400 generated
+tokens: **GPU 25 tok/s for 0.141 Wh, NPU 21 tok/s for 0.126 Wh**. Race-to-idle
+applies but does not cover the gap — 19% faster for 12% more energy. Too close
+to decide anything; the context ceiling decides.
 
 ```sh
 geshtu models                  # what each endpoint serves, and its state
