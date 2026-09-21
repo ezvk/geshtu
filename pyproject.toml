@@ -52,5 +52,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["geshtu*"]
 
+# Les icones voyagent avec le paquet : le tray en donne le chemin absolu a
+# l hote, qui ne resout alors aucun nom de theme.
+[tool.setuptools.package-data]
+geshtu = ["icons/*.svg"]
+
 [tool.flake8]
 max-line-length = 100

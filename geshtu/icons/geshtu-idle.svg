@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Un micro, en blanc plein : les barres de shell sont sombres par
+       defaut, et un glyphe monochrome reste lisible sur un fond clair
+       grace au contour sombre translucide. -->
+  <g fill="none" stroke="#000" stroke-opacity=".35" stroke-width="3.2"
+     stroke-linecap="round" stroke-linejoin="round">
+    <rect x="9.5" y="3" width="5" height="10" rx="2.5"/>
+    <path d="M6 11a6 6 0 0 0 12 0"/>
+    <path d="M12 17v4"/>
+  </g>
+  <g fill="none" stroke="#fff" stroke-width="1.8"
+     stroke-linecap="round" stroke-linejoin="round">
+    <rect x="9.5" y="3" width="5" height="10" rx="2.5"/>
+    <path d="M6 11a6 6 0 0 0 12 0"/>
+    <path d="M12 17v4"/>
+  </g>
+</svg>

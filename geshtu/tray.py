@@ -51,8 +51,38 @@ assert gi  # imported for the typelib side effect
 # invitation a la faire taire.
 PATH = "/StatusNotifierItem"
 WATCHER = "org.kde.StatusNotifierWatcher"
-IDLE = "audio-input-microphone-symbolic"
-LIVE = "media-record-symbolic"
+# ⚠️ UN CHEMIN ABSOLU, PAS UN NOM DE THEME, ET C EST CE QUI DECIDE DE LA
+# PLACE DE L ICONE.
+#
+# ezvk : « tu l as mis dans un tiroir, faut pas ». Comparaison directe avec
+# LocalSend, qui lui est dans la barre -- memes Category et Status, rien dans
+# le protocole ne distingue les deux. La seule difference est la :
+#
+#     LocalSend  IconName = "/nix/store/.../assets/img/logo-32-w.png"
+#     geshtu     IconName = "audio-input-microphone-symbolic"
+#
+# C est l HOTE qui resout un nom de theme, pas nous -- d ou le fait que
+# mettre adwaita-icon-theme dans notre propre fermeture n y ait jamais rien
+# change. Un nom qu il ne resout pas donne une icone sans image, et il la
+# range ailleurs.
+#
+# → On livre les fichiers et on donne leur chemin. `GESHTU_ICONS` est pose
+#   par l empaquetage ; a defaut on retombe sur les noms de theme, ce qui
+#   reste correct pour un `pip install` sur un bureau ordinaire.
+
+def _icone(nom: str, repli: str) -> str:
+    dossier = os.environ.get("GESHTU_ICONS")
+    if dossier:
+        chemin = os.path.join(dossier, nom + ".svg")
+        if os.path.exists(chemin):
+            return chemin
+    ici = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
+    chemin = os.path.join(ici, nom + ".svg")
+    return chemin if os.path.exists(chemin) else repli
+
+
+IDLE = _icone("geshtu-idle", "audio-input-microphone-symbolic")
+LIVE = _icone("geshtu-recording", "media-record-symbolic")
 
 XML = """
 <node>
