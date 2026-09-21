@@ -44,6 +44,7 @@ FENETRE = 160000          # 10 s a 16 kHz, forme figee du modele
 PAS = 80000               # 5 s : recouvrement de moitie
 TRAME_EMB = 300           # 3 s de banc de filtres, forme figee pour le NPU
 MIN_ON = 0.3
+MIN_SIMULT = 0.3          # chevauchement minimal pour affirmer « deux personnes »
 MIN_OFF = 0.5
 
 # ⚠️ L ORDRE DES CLASSES POWERSET N EST PAS DEVINABLE, il vient de pyannote :
@@ -190,8 +191,39 @@ def regroupe(vecteurs, seuil, cible=None, interdits=()):
         D[b, :] = np.inf
         D[:, b] = np.inf
 
+    tetes = list(np.where(vivant)[0])
+
+    # ⚠️ UN NOMBRE DEMANDE DOIT ETRE TENU, y compris contre les contraintes.
+    # La fusion s arrete des qu il ne reste que des paires interdites : sur
+    # une emission a quatre participants on obtenait donc six groupes malgre
+    # `speakers = 4`, dont deux residus de 2,6 et 1,7 minutes. Or si
+    # l utilisateur affirme qu ils sont quatre, c est lui qui sait.
+    #
+    # On ne force pas une fusion interdite -- elle resterait fausse. On
+    # REAFFECTE les extraits des plus petits groupes, un par un, au groupe le
+    # plus proche qui ne leur est pas interdit A EUX. Les petits groupes sont
+    # precisement les incertains : les prendre en premier est le choix le
+    # moins destructeur.
+    if cible is not None and len(tetes) > cible:
+        tetes.sort(key=lambda t: -len(membres[t]))
+        gardes, surnumeraires = tetes[:cible], tetes[cible:]
+        centres = {}
+        for t in gardes:
+            c = V[membres[t]].mean(axis=0)
+            n = np.linalg.norm(c)
+            centres[t] = c / n if n else c
+        for t in surnumeraires:
+            for i in membres[t]:
+                possibles = [g for g in gardes
+                             if not tabou[i, membres[g]].any()]
+                if not possibles:
+                    possibles = gardes
+                proche = min(possibles, key=lambda g: 1.0 - float(V[i] @ centres[g]))
+                membres[proche].append(i)
+        tetes = gardes
+
     etiquette = {}
-    for numero, tete in enumerate(np.where(vivant)[0]):
+    for numero, tete in enumerate(tetes):
         for i in membres[tete]:
             etiquette[i] = numero
     return etiquette
@@ -251,22 +283,34 @@ def analyse(wav, modeles, seuil=0.9, device="NPU", locuteurs=None,
             if not intervalles:
                 continue
             extraits.append((intervalles[0][0], intervalles[-1][1],
-                             intervalles, nfen))
+                             intervalles, nfen, qui, on))
 
-    vecteurs, gardes, fenetre_de = [], [], []
-    for debut, fin, intervalles, nfen in extraits:
+    vecteurs, gardes, contexte = [], [], []
+    for debut, fin, intervalles, nfen, qui, on in extraits:
         v = empreinte(cemb, audio, intervalles)
         if v is not None:
             vecteurs.append(v)
             gardes.append((debut, fin))
-            fenetre_de.append(nfen)
+            contexte.append((nfen, on))
 
-    # Deux extraits issus de la MEME fenetre viennent de deux pistes locales
-    # distinctes, donc de deux personnes differentes.
-    interdits = [(i, j)
-                 for i in range(len(fenetre_de))
-                 for j in range(i + 1, len(fenetre_de))
-                 if fenetre_de[i] == fenetre_de[j]]
+    # ⚠️ L INTERDIT NE VAUT QUE POUR UNE SIMULTANEITE REELLE, pas pour deux
+    # pistes de la meme fenetre. Une fenetre fait dix secondes : deux
+    # personnes peuvent s y succeder sans jamais se chevaucher, et surtout
+    # UNE SEULE personne peut y etre rangee dans deux pistes locales, le
+    # modele n ayant aucune raison de les relier par-dessus une pause.
+    #
+    # Mesure du 2026-09-21 : sur 399 paires de pistes dans une meme fenetre,
+    # 149 -- 37 % -- ne se chevauchent pas du tout. Les interdire toutes
+    # faisait 9 locuteurs la ou il y en avait 4. Seule la simultanéité vraie
+    # est une certitude : a un instant donne, deux voix sont deux personnes.
+    interdits = []
+    for i in range(len(contexte)):
+        for j in range(i + 1, len(contexte)):
+            if contexte[i][0] != contexte[j][0]:
+                continue
+            ensemble = float((contexte[i][1] & contexte[j][1]).sum()) * pas_trame
+            if ensemble >= MIN_SIMULT:
+                interdits.append((i, j))
     if not vecteurs:
         return []
     etiquette = regroupe(vecteurs, seuil, locuteurs, interdits)
