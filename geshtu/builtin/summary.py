@@ -80,20 +80,56 @@ class Summarise:
                 continue
             context = ("What came before, for reference only:\n%s\n\n" % digest
                        if digest else "")
-            answer = engines.chat(engine, words["chapter"] % (text, context),
-                                  words["system"], max_tokens=1100)
+            try:
+                answer, coupe = _demande(engine, words["chapter"] % (text, context),
+                                         words["system"])
+            except Exception as exc:                     # noqa: BLE001
+                # ⚠️ UN CHAPITRE PERDU NE DOIT PAS COUTER LA REUNION. Vecu le
+                # 2026-09-21 : le chapitre 2 depassait le budget de jetons et
+                # l exception a emporte les trois, plus le compte rendu.
+                report("  chapter %d failed: %s" % (i, exc))
+                continue
             chapter.title, chapter.body = _title_and_body(answer)
+            if coupe:
+                chapter.body += "\n\n*(réponse tronquée par le modèle)*"
             done.append(chapter)
             digest = (digest + " " + chapter.title)[-400:]
-            report("  chapter %d/%d: %s" % (i, len(session.chapters), chapter.title))
+            report("  chapter %d/%d: %s%s"
+                   % (i, len(session.chapters), chapter.title,
+                      "  [tronqué]" if coupe else ""))
 
         if not done:
             report("nothing usable was said -- no summary produced")
             return
         joined = "\n\n".join("%s\n%s" % (c.title, c.body) for c in done)
-        session.summary = engines.chat(engine, words["synthesis"] % joined,
-                                       words["system"], max_tokens=1200)
+        try:
+            session.summary, coupe = _demande(engine, words["synthesis"] % joined,
+                                              words["system"], budget=1400)
+            if coupe:
+                session.summary += "\n\n*(réponse tronquée par le modèle)*"
+        except Exception as exc:                         # noqa: BLE001
+            report("overall summary failed: %s" % exc)
         session.title = done[0].title
+
+
+def _demande(engine, prompt, system, budget=1400):
+    """Demande une reponse, en agrandissant le budget plutot qu en perdant tout.
+
+    ⚠️ TROIS TENTATIVES, ET LA DERNIERE ACCEPTE LA TRONCATURE — marquee comme
+    telle. Refuser une reponse coupee est juste : on n en tire aucune
+    conclusion sure. Mais refuser au point de ne RIEN rendre transforme un
+    chapitre bavard en reunion perdue, ce qui est pire. Le lecteur doit
+    pouvoir voir que le modele a ete coupe, pas deviner pourquoi il manque un
+    chapitre.
+    """
+    for maxi in (budget, budget * 2):
+        try:
+            return engines.chat(engine, prompt, system, max_tokens=maxi), False
+        except RuntimeError as exc:
+            if "truncated" not in str(exc):
+                raise
+    return engines.chat(engine, prompt, system, max_tokens=budget * 2,
+                        allow_truncated=True), True
 
 
 def _title_and_body(raw: str) -> tuple[str, str]:

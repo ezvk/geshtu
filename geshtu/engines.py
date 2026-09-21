@@ -65,7 +65,8 @@ def transcribe(engine, path: pathlib.Path) -> str:
         return (json.loads(resp.read()).get("text") or "").strip()
 
 
-def chat(engine, prompt: str, system: str = "", max_tokens: int = 1100) -> str:
+def chat(engine, prompt: str, system: str = "", max_tokens: int = 1100,
+         allow_truncated: bool = False) -> str:
     """One prompt in, one answer out.
 
     ⚠️ temperature 0.6, never 0: at zero, Qwen3 degenerates into loops.
@@ -93,10 +94,16 @@ def chat(engine, prompt: str, system: str = "", max_tokens: int = 1100) -> str:
         out = json.loads(resp.read())
     choice = (out.get("choices") or [{}])[0]
     # ⚠️ `length` means the answer was CUT. Concluding anything from a
-    # truncated answer is how invented "decisions" get into a report.
+    # truncated answer is how invented "decisions" get into a report -- so
+    # this raises by default, and the caller decides whether a cut answer is
+    # better than none. It is NOT the caller's job to guess: the flag makes
+    # the choice visible at the call site.
+    texte = (choice.get("message") or {}).get("content", "").strip()
     if choice.get("finish_reason") == "length":
-        raise RuntimeError("answer truncated (max_tokens=%d)" % max_tokens)
-    return (choice.get("message") or {}).get("content", "").strip()
+        if not allow_truncated:
+            raise RuntimeError("answer truncated (max_tokens=%d)" % max_tokens)
+        return texte
+    return texte
 
 
 def embed(engine, texts: list[str]) -> list[list[float]]:
