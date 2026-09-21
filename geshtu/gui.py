@@ -24,15 +24,12 @@ from geshtu.cli import hms      # noqa: E402
 
 # Streams first, because that is what one actually picks; the two fallbacks
 # after, because they are what one falls back to.
-GROUPS = [("app", "Playing now"), ("mic", ""), ("output", "")]
-
 
 class Window(Gtk.ApplicationWindow):
 
     def __init__(self, app):
         super().__init__(application=app, title="geshtu")
         self.set_default_size(620, 620)
-        self.chosen: set[str] = set()
         self.busy = False
         self.recording = False
 
@@ -52,14 +49,22 @@ class Window(Gtk.ApplicationWindow):
 
         # ---- sources -------------------------------------------------
         #
-        # ⚠️ A LIST, NOT A DROPDOWN. A session records SEVERAL tracks at once
-        # — the meeting in the browser and your own microphone is the normal
-        # case — and they are mixed afterwards. A single-choice control would
-        # quietly make that impossible.
-        self.list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        # ⚠️ UN SEUL CHOIX, ET LE MICRO A PART. La premiere version cochait
+        # librement plusieurs lignes ; ezvk : « source selection should not be
+        # a checkmark but a list with a unique selectable choice ». Il a
+        # raison : on enregistre UNE source, et la question « est-ce que ma
+        # voix y va aussi » n en est pas une deuxieme du meme genre. Les
+        # melanger fait une liste ou deux decisions differentes se ressemblent.
+        self.rows: list[dict] = []
+        self.list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
+        self.list.add_css_class("rich-list")
         scroll = Gtk.ScrolledWindow(vexpand=True, child=self.list)
         scroll.add_css_class("frame")
         box.append(scroll)
+
+        self.with_mic = Gtk.CheckButton(label="Also record my microphone")
+        self.with_mic.set_active(True)
+        box.append(self.with_mic)
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         row.append(Gtk.Label(label="Summary in", xalign=0))
@@ -67,11 +72,18 @@ class Window(Gtk.ApplicationWindow):
         row.append(self.lang)
         box.append(row)
 
-        self.button = Gtk.Button(label="Start recording")
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.button = Gtk.Button(label="Start recording", hexpand=True)
         self.button.add_css_class("suggested-action")
         self.button.set_size_request(-1, 46)
         self.button.connect("clicked", self.toggle)
-        box.append(self.button)
+        actions.append(self.button)
+        self.openfile = Gtk.Button(label="Open a recording…")
+        self.openfile.set_tooltip_text(
+            "Transcribe and summarise a file that already exists")
+        self.openfile.connect("clicked", self.open_file)
+        actions.append(self.openfile)
+        box.append(actions)
 
         # ---- engines -------------------------------------------------
         #
@@ -100,42 +112,45 @@ class Window(Gtk.ApplicationWindow):
             buf.create_mark(None, buf.get_end_iter(), False), 0, False, 0, 0)
 
     def reload(self) -> None:
+        keep = self.selected_key()
         r = call({"cmd": "targets"})
         child = self.list.get_first_child()
         while child is not None:
             nxt = child.get_next_sibling()
             self.list.remove(child)
             child = nxt
-        targets = r.get("targets", [])
-        for kind, title in GROUPS:
-            rows = [t for t in targets if t["kind"] == kind]
-            if not rows:
-                continue
-            if title:
-                head = Gtk.Label(label=title, xalign=0)
-                head.add_css_class("dim-label")
-                head.set_margin_top(6)
-                self.list.append(head)
-            for t in rows:
-                label = t["detail"] or t["label"]
-                if kind != "app":
-                    # "My microphone — SoundWire microphones": what it is, and
-                    # what it currently resolves to.
-                    label = "%s — %s" % (t["label"], t["detail"])
-                check = Gtk.CheckButton(label=label[:80])
-                check.set_active(t["key"] in self.chosen)
-                check.connect("toggled", self.pick, t["key"])
-                self.list.append(check)
+        self.rows = []
+        # ⚠️ Le micro n est PAS dans la liste : il est la case au-dessous.
+        targets = [t for t in r.get("targets", []) if t["kind"] != "mic"]
+        for t in targets:
+            if t["kind"] == "app":
+                title = t["detail"] or t["label"]
+                text = "%s — %s" % (t["label"], title)
+            else:
+                text = "%s — %s" % (t["label"], t["detail"])
+            label = Gtk.Label(label=text[:90], xalign=0)
+            label.set_margin_top(6)
+            label.set_margin_bottom(6)
+            label.set_margin_start(8)
+            self.list.append(label)
+            self.rows.append(t)
         if not targets:
             self.list.append(Gtk.Label(
-                label="nothing to record — an app appears only while it plays",
+                label="nothing is playing — a stream exists only while it plays",
                 xalign=0))
+            return
+        for i, t in enumerate(self.rows):
+            if t["key"] == keep:
+                self.list.select_row(self.list.get_row_at_index(i))
+                return
+        self.list.select_row(self.list.get_row_at_index(0))
 
-    def pick(self, check, key) -> None:
-        if check.get_active():
-            self.chosen.add(key)
-        else:
-            self.chosen.discard(key)
+    def selected_key(self) -> str | None:
+        row = self.list.get_selected_row()
+        if row is None:
+            return None
+        i = row.get_index()
+        return self.rows[i]["key"] if 0 <= i < len(self.rows) else None
 
     # ------------------------------------------------------------- engines
     def on_engines(self, expander, _param) -> None:
@@ -182,14 +197,49 @@ class Window(Gtk.ApplicationWindow):
             self.start()
 
     def start(self) -> None:
-        if not self.chosen:
-            self.log("pick at least one source")
+        key = self.selected_key()
+        if key is None:
+            self.log("pick a source")
             return
-        lang = "en" if self.lang.get_selected() == 0 else "fr"
-        r = call({"cmd": "start", "targets": sorted(self.chosen),
-                  "language": lang})
+        targets = [key]
+        if self.with_mic.get_active():
+            targets.append("default:mic")
+        r = call({"cmd": "start", "targets": targets, "language": self.lang_code()})
         self.log(r.get("error") or ("recording %s" % r.get("session")))
         self.tick()
+
+    def lang_code(self) -> str:
+        return "en" if self.lang.get_selected() == 0 else "fr"
+
+    def open_file(self, _button) -> None:
+        """Run the same chain on something already recorded.
+
+        ⚠️ IT IS A START FOLLOWED AT ONCE BY A STOP, not a separate path. A
+        file has nothing to capture, so the only honest way to keep one code
+        path is to let the pipeline see it as a session that is already over.
+        A second path would double the number of places a recording can end
+        up empty without anyone noticing.
+        """
+        dialog = Gtk.FileDialog(title="Open a recording")
+
+        def chosen(dlg, res):
+            try:
+                gfile = dlg.open_finish(res)
+            except Exception:                            # noqa: BLE001
+                return                                   # cancelled
+            path = gfile.get_path()
+            if not path:
+                return
+            r = call({"cmd": "start", "targets": ["file:" + path],
+                      "language": self.lang_code()})
+            if not r.get("ok"):
+                self.log(r.get("error", "could not open it"))
+                return
+            self.log("reading %s" % path)
+            self.log(call({"cmd": "stop"}).get("error") or "queued for the accelerator")
+            self.tick()
+
+        dialog.open(self, None, chosen)
 
     def stop(self) -> None:
         """⚠️ The daemon queues the processing and answers at once, so there is
@@ -224,6 +274,9 @@ class Window(Gtk.ApplicationWindow):
             self.button.remove_css_class("destructive-action")
             self.button.add_css_class("suggested-action")
         self.button.set_sensitive(not self.busy)
+        self.openfile.set_sensitive(not self.busy and not self.recording)
+        self.list.set_sensitive(not self.recording)
+        self.with_mic.set_sensitive(not self.recording)
         buf = self.view.get_buffer()
         known = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
         for line in r.get("log", []):
