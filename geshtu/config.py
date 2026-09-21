@@ -59,7 +59,14 @@ device = "GPU"
 # [diarisation]
 # engine = "openvino"   # or "sherpa", the CPU tool kept as a reference
 # device = "NPU"        # measured fastest of the three, and silent
-# threshold = 0.5       # HIGHER merges speakers, lower splits one voice in two
+# speakers = 4          # when you know: a count always beats a threshold
+#
+# ⚠️ `threshold` is a cosine distance and it is SHARP. Measured on a 2 h 35
+# conference: 0.5 gave 145 speakers, 0.7 gave 43, 0.9 gave 4, 1.1 gave 1.
+# Higher merges. The default sits at 0.9 because the same voice recorded
+# through a room microphone and through a remote link drifts well past 0.5
+# from itself.
+# threshold = 0.9
 # threads = 4           # sherpa only
 
 [pipeline]

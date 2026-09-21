@@ -81,8 +81,9 @@ class Diarise:
         try:
             return diarisation.analyse(
                 session.mixed, models,
-                seuil=opts.get("threshold", 0.5),
+                seuil=opts.get("threshold", 0.9),
                 device=opts.get("device", "NPU"),
+                locuteurs=opts.get("speakers"),
                 trace=report)
         except Exception as exc:                          # noqa: BLE001
             # ⚠️ ON RETOMBE PLUTOT QUE D ECHOUER : la diarisation est un

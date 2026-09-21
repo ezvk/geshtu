@@ -109,7 +109,7 @@ def empreinte(compile_emb, audio, debut, fin):
     return v / n if n else None
 
 
-def regroupe(vecteurs, seuil):
+def regroupe(vecteurs, seuil, cible=None):
     """Regroupement agglomeratif, distance cosinus, liaison moyenne.
 
     ⚠️ VECTORISE, ET CE N EST PAS DE LA COQUETTERIE. La premiere version
@@ -134,7 +134,13 @@ def regroupe(vecteurs, seuil):
         bloc = D[np.ix_(sous, sous)]
         k = np.argmin(bloc)
         a, b = sous[k // len(sous)], sous[k % len(sous)]
-        if D[a, b] > seuil:
+        # ⚠️ UN NOMBRE CONNU BAT TOUJOURS UN SEUIL. Quand l utilisateur
+        # sait qu ils sont quatre, on fusionne jusqu a quatre, point. Le seuil
+        # n est qu une facon de deviner ce nombre, et il devine mal.
+        if cible is not None:
+            if vivant.sum() <= cible:
+                break
+        elif D[a, b] > seuil:
             break
         # Lance-Williams pour la liaison moyenne
         na, nb = taille[a], taille[b]
@@ -155,7 +161,8 @@ def regroupe(vecteurs, seuil):
 
 
 
-def analyse(wav, modeles, seuil=0.5, device="NPU", trace=print):
+def analyse(wav, modeles, seuil=0.9, device="NPU", locuteurs=None,
+            trace=print):
     """Rend une liste de (debut, fin, numero de locuteur)."""
     import openvino as ov
 
@@ -201,10 +208,21 @@ def analyse(wav, modeles, seuil=0.5, device="NPU", trace=print):
             gardes.append((debut, fin))
     if not vecteurs:
         return []
-    etiquette = regroupe(vecteurs, seuil)
+    etiquette = regroupe(vecteurs, seuil, locuteurs)
+    trouves = max(etiquette.values()) + 1
     trace("%d excerpts, %d speakers, %.1f s on %s"
-          % (len(vecteurs), max(etiquette.values()) + 1,
-             time.time() - depart, device))
+          % (len(vecteurs), trouves, time.time() - depart, device))
+
+    # ⚠️ UN SEUIL MAL REGLE NE DEGRADE PAS SEULEMENT L ATTRIBUTION, IL COUTE
+    # DIX FOIS PLUS DE TRANSCRIPTION. Chaque faux changement de voix devient
+    # une tranche : mesure du 2026-09-21 sur une conference de 2 h 35, le
+    # seuil par defaut de 0,5 donnait 145 locuteurs et 808 tranches la ou 0,9
+    # en donne 4 et une petite centaine. Le dire tout de suite, pendant que
+    # la transcription n a pas encore tourne.
+    if locuteurs is None and trouves > max(4, duree / 120):
+        trace("⚠️  %d speakers for %.0f min looks like over-splitting; "
+              "raise [diarisation] threshold (higher merges) or set speakers"
+              % (trouves, duree / 60))
 
     tours = sorted((d, f, etiquette[i]) for i, (d, f) in enumerate(gardes))
     fusion = []
