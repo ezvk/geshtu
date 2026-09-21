@@ -62,10 +62,6 @@ class Window(Gtk.ApplicationWindow):
         scroll.add_css_class("frame")
         box.append(scroll)
 
-        self.with_mic = Gtk.CheckButton(label="Also record my microphone")
-        self.with_mic.set_active(True)
-        box.append(self.with_mic)
-
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         row.append(Gtk.Label(label="Summary in", xalign=0))
         self.lang = Gtk.DropDown(model=Gtk.StringList.new(["english", "français"]))
@@ -120,8 +116,21 @@ class Window(Gtk.ApplicationWindow):
             self.list.remove(child)
             child = nxt
         self.rows = []
-        # ⚠️ Le micro n est PAS dans la liste : il est la case au-dessous.
-        targets = [t for t in r.get("targets", []) if t["kind"] != "mic"]
+        # ⚠️ LE MICRO EST UNE LIGNE COMME LES AUTRES. Il a ete une case a
+        # cocher separee ; ezvk : « checkbox also record my mic is useless as
+        # your voice is reflected in main rendered/recorded stream ». Vrai
+        # d un jeu ou d une capture de la sortie systeme. Dans une visio
+        # navigateur en revanche le flux de l onglet porte la voix des AUTRES
+        # -- la sienne part vers eux -- donc la source reste offerte, en un
+        # clic, au lieu d etre une seconde question posee a part.
+        #
+        # ⚠️ ET LE CHOIX UNIQUE REND L ECHO IMPOSSIBLE, ce qui vaut mieux que
+        # de le documenter. ezvk : « it may even make an echo ». Melanger le
+        # micro a un flux qui porte deja la voix la double avec un leger
+        # decalage : ce n est pas qu un desagrement a l oreille, l ASR repete
+        # ou bafouille sur les passages doubles. On ne peut plus cocher les
+        # deux, donc le cas ne se presente plus.
+        targets = r.get("targets", [])
         for t in targets:
             if t["kind"] == "app":
                 title = t["detail"] or t["label"]
@@ -204,10 +213,8 @@ class Window(Gtk.ApplicationWindow):
         if key is None:
             self.log("pick a source")
             return
-        targets = [key]
-        if self.with_mic.get_active():
-            targets.append("default:mic")
-        r = call({"cmd": "start", "targets": targets, "language": self.lang_code()})
+        r = call({"cmd": "start", "targets": [key],
+                  "language": self.lang_code()})
         self.log(r.get("error") or ("recording %s" % r.get("session")))
         self.tick()
 
@@ -279,7 +286,6 @@ class Window(Gtk.ApplicationWindow):
         self.button.set_sensitive(not self.busy)
         self.openfile.set_sensitive(not self.busy and not self.recording)
         self.list.set_sensitive(not self.recording)
-        self.with_mic.set_sensitive(not self.recording)
         buf = self.view.get_buffer()
         known = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
         for line in r.get("log", []):

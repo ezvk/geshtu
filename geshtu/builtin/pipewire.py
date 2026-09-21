@@ -119,7 +119,14 @@ class PipeWireSource:
             # indistinguishable; the node id is the only handle there is
             if not media or counts.get(media, 0) > 1:
                 media = ("%s #%d" % (media, nid)).strip()
-            out.append(plugins.Target("node:%d" % nid, app, "app", media[:70]))
+            mark = "▶ " if props.get("_state") == "running" else "‖ "
+            out.append(plugins.Target("node:%d" % nid, app, "app",
+                                      (mark + media)[:72]))
+
+        # ⚠️ Playing streams first: the list is read in a hurry, at the moment
+        # a meeting starts, and the one that matters is almost always the one
+        # making sound.
+        out.sort(key=lambda t: (t.kind != "app", not t.detail.startswith("▶")))
 
         # ⚠️ THE DEFAULTS ARE RESOLVED WHEN RECORDING STARTS, NOT HERE. What
         # the machine plays through changes between reading a list and
@@ -310,16 +317,30 @@ class PipeWireSource:
 
 
 def _nodes() -> dict[int, dict]:
-    """Every application stream currently playing, by node id."""
+    """Every application stream, by node id, with its node STATE folded in.
+
+    ⚠️ THE STATE IS WHAT THE TITLE OFTEN IS NOT: available. ezvk: "on n'a pas
+    tous les titres de fenetre ffox, parfois seulement audiostream". Measured:
+    some Firefox streams really do carry media.name = "AudioStream" and
+    nothing else -- no window title, no tab id, nothing in the whole property
+    set. The browser only names a stream when it comes from a media element
+    whose title it knows.
+
+    But `running` versus `idle` is always there, and it answers the question
+    one is actually asking while picking a source: which of these is making
+    sound right now. So it is carried alongside and shown.
+    """
     found = {}
     for obj in _dump():
-        props = ((obj.get("info") or {}).get("props") or {})
+        info = obj.get("info") or {}
+        props = dict(info.get("props") or {})
         if props.get("media.class") != "Stream/Output/Audio":
             continue
         name = props.get("node.name") or ""
         # our own tools: listing them would invite recording ourselves
         if not name or name.startswith(("pw-record", "pw-play", "pw-cat", "geshtu")):
             continue
+        props["_state"] = info.get("state") or "unknown"
         found[obj["id"]] = props
     return found
 

@@ -44,7 +44,6 @@ class Tray:
         self.busy = False
         self.summary = "…"
         self.chosen: str | None = None
-        self.with_mic = True
         self.targets: list[dict] = []
         self.signature = None
         self.language = "en"
@@ -83,7 +82,7 @@ class Tray:
         # different question, and putting both in the same list makes two
         # unlike decisions look alike.
         first = None
-        rows = [t for t in self.targets if t["kind"] != "mic"]
+        rows = list(self.targets)
         for t in rows:
             if t["kind"] == "app":
                 text = "%s — %s" % (t["label"], t["detail"] or "")
@@ -106,11 +105,6 @@ class Tray:
         sources.set_sensitive(not self.recording)
         menu.append(sources)
 
-        mic = Gtk.CheckMenuItem(label="Also record my microphone")
-        mic.set_active(self.with_mic)
-        mic.set_sensitive(not self.recording)
-        mic.connect("toggled", self.pick_mic)
-        menu.append(mic)
 
         menu.append(Gtk.SeparatorMenuItem())
         window = Gtk.MenuItem(label="Open the window…")
@@ -128,15 +122,11 @@ class Tray:
         if item.get_active():
             self.chosen = key
 
-    def pick_mic(self, item) -> None:
-        self.with_mic = item.get_active()
-
     def toggle(self, _item) -> None:
         if self.recording:
             call({"cmd": "stop"})
         else:
-            targets = [self.chosen] + (["default:mic"] if self.with_mic else [])
-            call({"cmd": "start", "targets": targets,
+            call({"cmd": "start", "targets": [self.chosen],
                   "language": self.language})
         self.tick()
 
@@ -155,7 +145,7 @@ class Tray:
         # ⚠️ Keep the selection by KEY: the list moves as soon as an
         # application starts or stops, and keeping a position would silently
         # record something else.
-        live = {t["key"] for t in targets if t["kind"] != "mic"}
+        live = {t["key"] for t in targets}
         if self.chosen not in live:
             # ⚠️ Keep the choice by KEY and fall back visibly: the list moves
             # as soon as an application starts or stops, and silently sliding
