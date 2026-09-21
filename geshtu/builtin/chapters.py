@@ -22,6 +22,8 @@ from geshtu.models import Chapter
 
 MAX_SLICES = 8          # ~16 min: beyond this a cut is forced
 MIN_SLICES = 2          # ~4 min: avoids stub chapters
+MIN_MOTS = 40           # below this, a slice joins its neighbour rather than
+                        # deciding a topic boundary on its own
 
 
 class Chaptering:
@@ -34,11 +36,22 @@ class Chaptering:
         if not segs:
             report("nothing to chapter")
             return
-        if len(segs) <= MIN_SLICES:
+
+        # ⚠️ LES TRANCHES MINUSCULES NE FONT PAS DES CHAPITRES. Depuis que la
+        # transcription coupe aussi sur les changements de voix, une
+        # interjection de trois secondes est une tranche a part entiere --
+        # c est voulu pour l attribution. Mais la traiter comme un candidat de
+        # chapitre produit « chapter 4 skipped: 7 words » : un chapitre vide
+        # dans la note, et une frontiere de sujet decidee sur sept mots, ce
+        # qui n a aucun sens. Elles rejoignent le chapitre de leur voisine.
+        gros = [i for i, x in enumerate(segs) if len(x.text.split()) >= MIN_MOTS]
+        if len(gros) <= MIN_SLICES:
             session.chapters = [Chapter(segs[0].start, segs[-1].end, "", "")]
+            report("%d slices, too few to chapter" % len(gros))
             return
 
-        vectors = engines.embed(cfg.engine("embed"), [s.text for s in segs])
+        vectors = engines.embed(cfg.engine("embed"),
+                                [segs[i].text for i in gros])
         scores = [_cosine(vectors[i], vectors[i + 1]) for i in range(len(vectors) - 1)]
         mean = sum(scores) / len(scores)
         spread = (sum((x - mean) ** 2 for x in scores) / len(scores)) ** 0.5
@@ -47,9 +60,17 @@ class Chaptering:
         threshold = mean - 0.6 * spread
         report("%d slices, similarity threshold %.3f" % (len(segs), threshold))
 
-        groups = _split([list(range(len(segs)))], scores, threshold)
-        session.chapters = [
-            Chapter(segs[g[0]].start, segs[g[-1]].end, "", "") for g in groups]
+        groups = _split([list(range(len(gros)))], scores, threshold)
+        # ⚠️ ON REVIENT AUX BORNES REELLES : les groupes portent des indices
+        # dans la liste des tranches RETENUES, pas dans la transcription. Le
+        # premier chapitre part du debut et le dernier va jusqu a la fin, pour
+        # qu aucune parole ne tombe hors chapitre.
+        bornes = []
+        for n, g in enumerate(groups):
+            debut = segs[0].start if n == 0 else segs[gros[g[0]]].start
+            fin = segs[-1].end if n == len(groups) - 1 else segs[gros[g[-1]]].end
+            bornes.append(Chapter(debut, fin, "", ""))
+        session.chapters = bornes
         report("%d chapters" % len(session.chapters))
 
 
