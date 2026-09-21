@@ -93,15 +93,22 @@ def _title_and_body(raw: str) -> tuple[str, str]:
     :**", "## Titre -", or drop the label entirely. A strict parser produced a
     whole report of chapters called "(untitled)".
     """
-    lines = [x.strip().strip("*# ") for x in raw.splitlines()]
+    lines = [x.strip() for x in raw.splitlines()]
     title, body = "", []
+    # ⚠️ THE LABEL IS MATCHED IN EVERY LANGUAGE THIS PROMPTS IN, and around
+    # whatever decoration the model adds. A French-only pattern let an English
+    # run through untouched and the heading came out as
+    # "# TITLE:** Secret Shared About ...". A model asked for "TITLE:" will
+    # write "**TITLE:**", "## Title -", or drop the label entirely; a strict
+    # parser once produced a whole report of chapters called "(untitled)".
+    label = re.compile(r"(?i)^[*#\s]*(titre|title)\s*[:\-]?\s*[*#\s]*")
     for line in lines:
-        if not title and re.match(r"(?i)^titre?\s*:", line):
-            title = re.sub(r"(?i)^titre?\s*:\s*", "", line).strip(" *:")
+        if not title and label.match(line) and label.sub("", line).strip(" *#:-"):
+            title = label.sub("", line).strip(" *#:-")
             continue
-        body.append(line)
+        body.append(line.strip("*# ") if line.strip("*# ").isupper() else line)
     if not title:
-        title = next((x for x in lines if x), "")[:70]
+        title = next((x for x in lines if x), "").strip(" *#:-")[:70]
         body = lines[1:]
     return title, "\n".join(body).strip()
 

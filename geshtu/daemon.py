@@ -82,6 +82,14 @@ class State:
             raise RuntimeError("source %r is not installed" % self.source_name)
         return src
 
+    def source_for(self, session):
+        """A session records from one source; a file session has nothing to
+        stop, and calling PipeWire's stop() on it would hunt for pid files
+        that never existed."""
+        if any(t.kind == "file" for t in session.tracks):
+            return self.sources.get("file") or self.source()
+        return self.source()
+
     def targets(self) -> list[dict]:
         out = []
         for name, src in self.sources.items():
@@ -98,14 +106,38 @@ class State:
             root = self.cfg.sessions / time.strftime("%Y-%m-%d_%H-%M")
             root.mkdir(parents=True, exist_ok=True)
             session = models.Session(id=root.name, root=root, language=language)
-            src = self.source()
-            known = {t.key: t for t in src.targets()}
-            for i, key in enumerate(keys):
-                target = known.get(key)
-                if target is None:
-                    return {"ok": False, "error": "unknown target %r" % key}
-                session.tracks.append(src.start(session, target, i))
-            session.save()
+            # ⚠️ A KEY MAY NAME ITS OWN SOURCE. "file:/path/to/talk.mp4" is
+            # not something any source can enumerate -- a file is named, not
+            # discovered -- so it is resolved here rather than forcing every
+            # source to invent a listing it does not have.
+            if len(keys) == 1 and keys[0].startswith("file:"):
+                src = self.sources.get("file")
+                if src is None:
+                    return {"ok": False, "error": "the file source is not installed"}
+                target = plugins.Target(keys[0][5:], keys[0][5:], "file")
+                known = {keys[0]: target}
+            else:
+                src = self.source()
+                known = {t.key: t for t in src.targets()}
+            # ⚠️ ANYTHING THAT FAILS AFTER THE FIRST RECORDER IS LAUNCHED
+            # MUST STOP IT. A half-started session leaves a live recorder, a
+            # capture sink in the user's audio chooser, and a daemon that
+            # believes nothing is running -- so stop() refuses to help. Seen
+            # for real: a serialisation error three lines below this loop.
+            try:
+                for i, key in enumerate(keys):
+                    target = known.get(key)
+                    if target is None:
+                        raise RuntimeError("unknown target %r" % key)
+                    session.tracks.append(src.start(session, target, i))
+                session.save()
+            except Exception as exc:                     # noqa: BLE001
+                try:
+                    src.stop(session)
+                except Exception:                        # noqa: BLE001
+                    pass
+                self.report("start failed, recorders stopped: %s" % exc)
+                return {"ok": False, "error": str(exc)}
             self.session = session
             self.report("recording %s: %s" % (session.id, ", ".join(keys)))
             return {"ok": True, "session": session.id}
@@ -115,7 +147,7 @@ class State:
             session = self.session
             if session is None:
                 return {"ok": False, "error": "not recording"}
-            self.source().stop(session)
+            self.source_for(session).stop(session)
             session.ended = time.time()
             self.session = None
 

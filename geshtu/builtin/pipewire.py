@@ -41,10 +41,10 @@ from __future__ import annotations
 
 import json
 import os
-import pathlib
 import re
 import signal
 import subprocess
+import sys
 import time
 
 from geshtu import plugins
@@ -80,38 +80,64 @@ class PipeWireSource:
 
     # -- discovery ------------------------------------------------------
     def targets(self) -> list[plugins.Target]:
-        """⚠️ DEDUPLICATED BY KEY. One application routinely owns several
-        nodes -- a browser opens one per tab, a game client one per mixer
-        channel -- and they all share a node.name. Listing them separately
-        offers the same choice three times, and since derivation matches on
-        the name it would make no difference which one was picked. The richest
-        label wins, so a tab title beats a bare node name.
+        """One target per NODE, and emphatically not one per application name.
+
+        ⚠️ SEVERAL INSTANCES OF THE SAME PROGRAM SHARE A node.name. Measured on
+        a real desktop: three Moonlight windows, all called "Moonlight", each a
+        separate node with its own ports. An earlier version collapsed them
+        into one entry on the theory that duplicates were noise. They were not
+        -- they were three running programs, and merging them meant a request
+        to record one of them would have tapped all three. That is precisely
+        the leakage this source exists to prevent.
+
+        So an application target is addressed by node id, and derivation links
+        PORT IDS rather than port names: `pw-link Moonlight:output_FL ...`
+        cannot say WHICH Moonlight.
         """
+        nodes = _nodes()
         out: list[plugins.Target] = []
         for obj in _dump():
             props = ((obj.get("info") or {}).get("props") or {})
             cls = props.get("media.class")
             node = props.get("node.name") or ""
-            if not node:
+            if not node or cls not in ("Audio/Source", "Audio/Sink"):
                 continue
             label = props.get("node.description") or node
+            # ⚠️ Devices keep a stable key across reboots -- numeric ids do not
+            # survive a restart, names do. Application streams are the
+            # opposite case: they do not outlive their process, so there is
+            # nothing to remember and precision wins.
             if cls == "Audio/Source" and "monitor" not in node:
                 out.append(plugins.Target(node, label, "mic"))
             elif cls == "Audio/Sink" and node != SINK:
                 out.append(plugins.Target(node, label, "output"))
-            elif cls == "Stream/Output/Audio":
-                if node.startswith(("pw-record", "pw-play", "pw-cat", "geshtu")):
-                    continue
-                app = props.get("application.name") or node
-                media = (props.get("media.name") or "").strip()
-                out.append(plugins.Target(node, app, "app", media[:70]))
 
-        unique: dict[str, plugins.Target] = {}
-        for t in out:
-            seen = unique.get(t.key)
-            if seen is None or (not seen.detail and t.detail):
-                unique[t.key] = t
-        return list(unique.values())
+        counts: dict[str, int] = {}
+        for props in nodes.values():
+            name = props.get("node.name") or ""
+            counts[name] = counts.get(name, 0) + 1
+
+        # ⚠️ ONLY NODES THAT ACTUALLY HAVE OUTPUT PORTS. Measured on utu:
+        # four nodes named "Moonlight" existed, and only two of them carried
+        # any port -- the other two cannot be recorded at all. Offering them
+        # is worse than not listing them, because the user picks one, the
+        # derivation silently produces nothing, and the recording is an hour
+        # of the capture sink's own silence.
+        with_ports = _nodes_with_ports()
+        for nid, props in sorted(nodes.items()):
+            if nid not in with_ports:
+                continue
+            node = props.get("node.name") or ""
+            app = props.get("application.name") or node
+            media = (props.get("media.name") or "").strip()
+            detail = media[:70]
+            if counts.get(node, 0) > 1:
+                # ⚠️ Three identical windows are genuinely indistinguishable
+                # from the outside; the node id is the only handle there is.
+                # Showing it beats silently picking one of them.
+                detail = ("%s #%d" % (media, nid)).strip()
+            out.append(plugins.Target("node:%d" % nid, app, "app", detail))
+        return out
 
     # -- the tap --------------------------------------------------------
     def _sink_present(self) -> bool:
@@ -139,22 +165,26 @@ class PipeWireSource:
                 subprocess.run(["pw-cli", "destroy", str(obj["id"])],
                                capture_output=True)
 
-    def _derive(self, node: str, session) -> int:
-        """Add a link from the application's ports to the tap. Non-destructive.
+    def _derive(self, node_id: int, session) -> int:
+        """Add links from ONE node's output ports to the tap. Non-destructive.
 
-        A link that already exists makes pw-link fail with "File exists"; that
-        is expected, because the watcher below reruns this every two seconds.
+        ⚠️ BY PORT ID, NOT BY PORT NAME. Port names carry the node NAME, which
+        several instances of the same program share -- linking by name would
+        tap every one of them. Ids address exactly one.
+
+        A link that already exists makes pw-link fail; that is expected,
+        because the watcher below reruns this every two seconds.
         """
+        tap = {p["name"]: p["id"] for p in _ports_of_name(SINK, "in")}
         made = []
-        for port in _run("pw-link", "-o").splitlines():
-            port = port.strip()
-            if not port.startswith(node + ":"):
+        for port in _ports_of_node(node_id, "out"):
+            channel = port["name"].rsplit("_", 1)[-1]
+            dst = tap.get("playback_" + (channel if channel in ("FL", "FR") else "FL"))
+            if dst is None:
                 continue
-            channel = port.rsplit("_", 1)[-1]
-            dst = "%s:playback_%s" % (SINK, channel if channel in ("FL", "FR") else "FL")
-            if subprocess.run(["pw-link", port, dst],
+            if subprocess.run(["pw-link", str(port["id"]), str(dst)],
                               capture_output=True).returncode == 0:
-                made.append("%s\t%s" % (port, dst))
+                made.append("%d\t%d" % (port["id"], dst))
         if made:
             with (session.root / "links.tsv").open("a") as fh:
                 fh.write("\n".join(made) + "\n")
@@ -180,7 +210,11 @@ class PipeWireSource:
         wav = session.root / ("%s-%s-%03d.wav" % (target.kind, _safe(target.key), index))
         cmd = ["pw-record", "--rate", str(rate), "--channels", str(channels)]
 
+        node_id = None
         if target.kind == "app":
+            node_id = int(target.key.split(":", 1)[1])
+            if node_id not in _nodes():
+                raise RuntimeError("that stream is gone -- list the targets again")
             if not self._create_sink():
                 raise RuntimeError("could not create the capture sink %s" % SINK)
             cmd += ["--target", SINK, "-P", "stream.capture.sink=true"]
@@ -197,39 +231,40 @@ class PipeWireSource:
         (session.root / ("%s.pid" % _safe(target.key))).write_text(str(proc.pid))
 
         if target.kind == "app":
-            self._derive(target.key, session)
-            self._watch(target.key, session)
+            props = _nodes().get(node_id, {})
+            # ⚠️ ZERO LINKS IS A HARD FAILURE, NEVER A WARNING. Without a
+            # link the recorder happily captures the capture sink's own
+            # silence for as long as you let it, and every level readout
+            # along the way looks healthy. Refuse now.
+            if self._derive(node_id, session) == 0:
+                raise RuntimeError(
+                    "could not derive that stream -- nothing was linked")
+            self._watch(node_id, props.get("application.process.id"), session)
 
         return Track(kind=target.kind, source=target.label, segments=[wav])
 
-    def _watch(self, node: str, session) -> None:
+    def _watch(self, node_id: int, pid, session) -> None:
         """Re-derive every two seconds.
 
         ⚠️ WHY A LOOP AND NOT A SINGLE LINK. An application opens a NEW node
         for every stream: a reloaded tab, a restarted call, an advert slotted
         in. The original link dies with the old node, and from then on you
         record silence -- while everything still looks healthy.
+
+        ⚠️ AND WHAT THE LOOP FOLLOWS DEPENDS ON WHAT THE PROGRAM EXPOSES.
+        With a process id it follows the PROCESS, so a new tab of the same
+        browser is picked up while a second copy of the program is not.
+        Without one -- Moonlight publishes no application.process.id, measured
+        -- it can only follow that single node, and when the node goes, the
+        derivation ends. Claiming otherwise would be worse than the limit.
         """
-        script = (
-            "import subprocess,sys,time,pathlib\n"
-            "node,root=sys.argv[1],pathlib.Path(sys.argv[2])\n"
-            "while (root/'watch.pid').exists():\n"
-            "    out=subprocess.run(['pw-link','-o'],capture_output=True,text=True).stdout\n"
-            "    for p in out.splitlines():\n"
-            "        p=p.strip()\n"
-            "        if not p.startswith(node+':'): continue\n"
-            "        c=p.rsplit('_',1)[-1]\n"
-            "        d='%s:playback_'+(c if c in ('FL','FR') else 'FL')\n"
-            "        r=subprocess.run(['pw-link',p,d],capture_output=True)\n"
-            "        if r.returncode==0:\n"
-            "            (root/'links.tsv').open('a').write(p+chr(9)+d+chr(10))\n"
-            "    time.sleep(2)\n" % SINK
-        )
-        path = session.root / "watch.py"
-        path.write_text(script)
-        proc = subprocess.Popen([os.sys.executable, str(path), node, str(session.root)],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                start_new_session=True)
+        script = (session.root / "watch.py")
+        script.write_text(WATCHER)
+        proc = subprocess.Popen(
+            [sys.executable, str(script), str(session.root), str(node_id),
+             "" if pid is None else str(pid)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
         (session.root / "watch.pid").write_text(str(proc.pid))
 
     def stop(self, session) -> None:
@@ -258,6 +293,111 @@ class PipeWireSource:
                     pass
         self._cut_links(session)
         self._destroy_sink()
+
+
+def _nodes() -> dict[int, dict]:
+    """Every application stream currently playing, by node id."""
+    found = {}
+    for obj in _dump():
+        props = ((obj.get("info") or {}).get("props") or {})
+        if props.get("media.class") != "Stream/Output/Audio":
+            continue
+        name = props.get("node.name") or ""
+        # our own tools: listing them would invite recording ourselves
+        if not name or name.startswith(("pw-record", "pw-play", "pw-cat", "geshtu")):
+            continue
+        found[obj["id"]] = props
+    return found
+
+
+def _nodes_with_ports() -> set[int]:
+    """Node ids that own at least one output port -- i.e. that can be tapped."""
+    found = set()
+    for obj in _dump():
+        if not obj.get("type", "").endswith("Port"):
+            continue
+        props = (obj.get("info") or {}).get("props") or {}
+        if props.get("port.direction") == "out" and props.get("node.id") is not None:
+            found.add(props["node.id"])
+    return found
+
+
+def _ports_of_node(node_id: int, direction: str) -> list[dict]:
+    out = []
+    for obj in _dump():
+        if not obj.get("type", "").endswith("Port"):
+            continue
+        props = (obj.get("info") or {}).get("props") or {}
+        if props.get("node.id") == node_id and props.get("port.direction") == direction:
+            out.append({"id": obj["id"], "name": props.get("port.name") or ""})
+    return out
+
+
+def _ports_of_name(node_name: str, direction: str) -> list[dict]:
+    ids = [o["id"] for o in _dump()
+           if (((o.get("info") or {}).get("props") or {}).get("node.name") == node_name)]
+    out = []
+    for nid in ids:
+        out.extend(_ports_of_node(nid, direction))
+    return out
+
+
+WATCHER = """import json
+import pathlib
+import subprocess
+import sys
+import time
+
+root, node_id = pathlib.Path(sys.argv[1]), int(sys.argv[2])
+pid = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else None
+SINK = "%s"
+
+
+def dump():
+    try:
+        return json.loads(subprocess.run(["pw-dump"], capture_output=True,
+                                         text=True).stdout)
+    except ValueError:
+        return []
+
+
+while (root / "watch.pid").exists():
+    objs = dump()
+    props_of = {}
+    for o in objs:
+        props_of[o.get("id")] = ((o.get("info") or {}).get("props") or {})
+    wanted = set()
+    for oid, p in props_of.items():
+        if p.get("media.class") != "Stream/Output/Audio":
+            continue
+        if pid is not None and p.get("application.process.id") == pid:
+            wanted.add(oid)
+        elif pid is None and oid == node_id:
+            wanted.add(oid)
+    tap = {}
+    for o in objs:
+        if not o.get("type", "").endswith("Port"):
+            continue
+        p = (o.get("info") or {}).get("props") or {}
+        holder = props_of.get(p.get("node.id"), {})
+        if holder.get("node.name") == SINK and p.get("port.direction") == "in":
+            tap[p.get("port.name")] = o["id"]
+    for o in objs:
+        if not o.get("type", "").endswith("Port"):
+            continue
+        p = (o.get("info") or {}).get("props") or {}
+        if p.get("node.id") not in wanted or p.get("port.direction") != "out":
+            continue
+        chan = (p.get("port.name") or "").rsplit("_", 1)[-1]
+        dst = tap.get("playback_" + (chan if chan in ("FL", "FR") else "FL"))
+        if dst is None:
+            continue
+        r = subprocess.run(["pw-link", str(o["id"]), str(dst)], capture_output=True)
+        if r.returncode == 0:
+            with (root / "links.tsv").open("a") as fh:
+                fh.write("%%d\\t%%d\\n" %% (o["id"], dst))
+    time.sleep(2)
+""" % SINK
 
 
 def _alive(pid: int) -> bool:

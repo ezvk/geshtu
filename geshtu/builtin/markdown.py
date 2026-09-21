@@ -10,13 +10,24 @@ class MarkdownSink:
     name = "markdown"
 
     def deliver(self, session, cfg, report) -> None:
+        # ⚠️ NO NOTE FOR A SESSION WITH NOTHING IN IT. A recording that caught
+        # only silence produces a file with a heading and an empty transcript,
+        # which is indistinguishable at a glance from a real note and quietly
+        # fills the folder. The daemon log already said why it was silent;
+        # repeating it as a document helps nobody.
+        if not session.segments:
+            report("nothing was transcribed -- no note written")
+            return
         out = pathlib.Path(
             cfg.raw.get("markdown", {}).get("folder")
             or (pathlib.Path.home() / "Documents" / "geshtu")).expanduser()
         out.mkdir(parents=True, exist_ok=True)
-        slug = re.sub(r"[^A-Za-z0-9]+", "-", session.title or session.id)[:60].strip("-")
-        path = out / ("%s-%s.md" % (time.strftime("%Y-%m-%d", time.localtime(session.started)),
-                                    slug.lower() or "session"))
+        day = time.strftime("%Y-%m-%d", time.localtime(session.started))
+        # The session id already begins with the date; repeating it gives
+        # names like 2026-09-21-2026-09-21-11-12.md.
+        name = session.title or session.id.removeprefix(day).strip("_-") or "session"
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", name)[:60].strip("-").lower()
+        path = out / ("%s-%s.md" % (day, slug or "session"))
 
         lines = [
             "---",

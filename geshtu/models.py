@@ -101,11 +101,23 @@ def seg_total(track: Track) -> float:
 
 
 def as_dict(obj):
+    """⚠️ IT MUST RECURSE INTO PLAIN DICTS, not only into dataclasses.
+
+    `dataclasses.asdict` already flattens nested dataclasses into dicts, so a
+    version that only recursed on dataclasses walked straight past them and
+    left Path objects in place. json.dumps then raised "Object of type
+    PosixPath is not JSON serializable" -- inside save(), which runs after the
+    recorders have started. The recording was live, the session was never
+    registered, and stop() answered "not recording" while leaving an orphan
+    recorder behind. One missing branch, three visible symptoms.
+    """
     if dataclasses.is_dataclass(obj):
-        return {k: as_dict(v) for k, v in dataclasses.asdict(obj).items()}
+        obj = dataclasses.asdict(obj)
+    if isinstance(obj, dict):
+        return {k: as_dict(v) for k, v in obj.items()}
     if isinstance(obj, pathlib.Path):
         return str(obj)
-    if isinstance(obj, list):
+    if isinstance(obj, (list, tuple)):
         return [as_dict(x) for x in obj]
     return obj
 
