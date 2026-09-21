@@ -65,8 +65,16 @@ class Summarise:
         done = []
 
         for i, chapter in enumerate(session.chapters, 1):
-            text = " ".join(s.text for s in session.segments
-                            if s.start >= chapter.start and s.end <= chapter.end).strip()
+            # ⚠️ LES LOCUTEURS ENTRENT DANS L INVITE quand on les connait :
+            # sans eux le modele ne peut pas dire QUI s engage sur quoi, et
+            # une action sans responsable ne vaut pas grand chose dans un
+            # compte rendu.
+            morceaux = []
+            for s in session.segments:
+                if s.start < chapter.start or s.end > chapter.end:
+                    continue
+                morceaux.append("%s: %s" % (s.speaker, s.text) if s.speaker else s.text)
+            text = "\n".join(morceaux).strip()
             if len(text.split()) < MIN_WORDS:
                 report("  chapter %d skipped: %d words" % (i, len(text.split())))
                 continue

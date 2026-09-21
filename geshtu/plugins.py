@@ -114,6 +114,7 @@ BUILTIN = {
     "geshtu.sources": {"pipewire": ("geshtu.builtin.pipewire", "PipeWireSource"),
                        "file": ("geshtu.builtin.filesource", "FileSource")},
     "geshtu.stages": {"transcribe": ("geshtu.builtin.asr", "Transcribe"),
+                      "diarise": ("geshtu.builtin.diarise", "Diarise"),
                       "chapter": ("geshtu.builtin.chapters", "Chaptering"),
                       "summarise": ("geshtu.builtin.summary", "Summarise")},
     "geshtu.sinks": {"markdown": ("geshtu.builtin.markdown", "MarkdownSink")},

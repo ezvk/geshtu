@@ -53,7 +53,8 @@ class MarkdownSink:
         # the model invents something.
         lines += ["---", "", "<details><summary>Full transcript</summary>", ""]
         for s in session.segments:
-            lines.append("**%s** %s" % (_hms(s.start), s.text))
+            qui = ("**%s** " % s.speaker) if s.speaker else ""
+            lines.append("%s`%s` %s" % (qui, _hms(s.start), s.text))
             lines.append("")
         lines += ["</details>", ""]
 

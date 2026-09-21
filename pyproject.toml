@@ -39,6 +39,7 @@ file = "geshtu.builtin.filesource:FileSource"
 
 [project.entry-points."geshtu.stages"]
 transcribe = "geshtu.builtin.asr:Transcribe"
+diarise = "geshtu.builtin.diarise:Diarise"
 chapter = "geshtu.builtin.chapters:Chaptering"
 summarise = "geshtu.builtin.summary:Summarise"
 
