@@ -18,6 +18,8 @@ USAGE = """geshtu — self-hosted meeting intelligence
   geshtu reprocess <id>            run the pipeline again on a session
   geshtu models                    engines, their device, and what they serve
   geshtu model <engine> <name>     point an engine at another model
+  geshtu models add <dir|hf:id>    serve a model dropped in the repository
+  geshtu models remove <name>      stop serving it
   geshtu daemon                    run the daemon in the foreground
 
 Options:
@@ -50,6 +52,37 @@ def call(msg: dict) -> dict:
 def hms(seconds: float) -> str:
     s = int(seconds)
     return "%02d:%02d:%02d" % (s // 3600, (s % 3600) // 60, s % 60)
+
+
+def _models_add(args: list[str]) -> int:
+    """geshtu models add <dir|hf:org/model> [--name N] [--task T] [-- ...]
+
+    Anything after a bare `--` is handed to the model server untouched, which
+    is how task-specific options such as --max_prompt_len travel without this
+    command having to know what they mean.
+    """
+    from geshtu import config as _c
+    from geshtu import repository
+    if not args:
+        print(_models_add.__doc__)
+        return 1
+    source, args = args[0], args[1:]
+    extra: list[str] = []
+    if "--" in args:
+        i = args.index("--")
+        extra, args = args[i + 1:], args[:i]
+    opts = dict(zip(args[::2], args[1::2]))
+    name = opts.get("--name") or source.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+    task = opts.get("--task", "text_generation")
+    cfg = _c.load()
+    if source.startswith("hf:"):
+        path = repository.pull(cfg, source[3:], name, task, extra)
+        print("pulled into %s" % path)
+        source = path
+    print(repository.add(cfg, source, name, task, extra))
+    print("the server picks it up on its next poll "
+          "(--file_system_poll_wait_seconds)")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -107,6 +140,18 @@ def main(argv: list[str] | None = None) -> int:
         for s in call({"cmd": "sessions"}).get("sessions", []):
             print("  %-20s %-3d chapters  %s"
                   % (s["id"], s["chapters"], s["title"]))
+        return 0
+
+    if cmd == "models" and rest[:1] == ["add"]:
+        return _models_add(rest[1:])
+
+    if cmd == "models" and rest[:1] == ["remove"]:
+        if len(rest) < 2:
+            print("usage: geshtu models remove <name>")
+            return 1
+        from geshtu import config as _c
+        from geshtu import repository
+        print(repository.remove(_c.load(), rest[1]))
         return 0
 
     if cmd == "models":

@@ -138,7 +138,7 @@ Three kinds, because a meeting assistant has three moving parts:
 
 | kind | does | examples |
 |---|---|---|
-| **source** | produces audio | PipeWire, file, RTSP |
+| **source** | produces audio | PipeWire, file, **a joiner that dials into a Teams or Meet call** |
 | **stage** | transforms the session | transcribe, diarise, chapter, summarise |
 | **sink** | delivers the result | Markdown, Matrix, webhook, wiki |
 
@@ -146,6 +146,14 @@ A stage never calls another stage: it reads and writes the session and stops.
 That is what lets you reorder the pipeline, swap a model, or drop a step
 without touching anything else — and the session is saved after each one, so a
 failure in summarising never costs the transcription.
+
+A source does not have to tap something already playing — it may **make** it.
+That is how a meeting joiner fits: handed a URL, it opens the call and the
+rest of the chain is unchanged.
+
+```sh
+geshtu start meet:https://meet.google.com/abc-defg-hij
+```
 
 Discovery is by entry point, so a package installed alongside is picked up
 with no registration. A directory of loose `.py` files is scanned too — drop

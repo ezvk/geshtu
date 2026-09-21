@@ -46,6 +46,14 @@ device = "CPU"
 [pipeline]
 stages = ["transcribe", "chapter", "summarise"]
 sinks = ["markdown"]
+
+# Dropping a model in a folder and having it served. The server must be
+# started with --config_path <config> --file_system_poll_wait_seconds N,
+# otherwise it never re-reads what geshtu writes here.
+# [repository]
+# ovms = "ovms"
+# models = "/var/lib/geshtu/models"
+# config = "/var/lib/geshtu/ovms.json"
 """
 
 

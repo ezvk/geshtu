@@ -22,6 +22,8 @@ class FileSource:
         return []
 
     def start(self, session, target: plugins.Target, index: int) -> Track:
+        # The track kind matches the source name, which is how the daemon
+        # knows whose stop() to call when the session ends.
         src = pathlib.Path(target.key).expanduser()
         if not src.is_file():
             raise RuntimeError("no such file: %s" % src)

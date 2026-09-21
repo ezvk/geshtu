@@ -71,8 +71,37 @@ class Rtsp:
         ...                     # must WAIT for files to be closed
 ```
 
-`Target.key` must survive a restart. Never use a numeric PipeWire id: they are
-reassigned on every boot.
+`Target.key` must survive a restart where that makes sense. A device does:
+name it, never use a numeric PipeWire id, which is reassigned on every boot.
+An application stream does not — it dies with its process, so precision wins
+over persistence there.
+
+## A source that has nothing to enumerate
+
+Some sources do not tap what is already playing: they **make** it. A file is
+named, not discovered. A meeting joiner is handed a URL, opens the call, and
+produces audio that did not exist a second earlier.
+
+Those are addressed as `<source name>:<whatever the source understands>`, and
+`targets()` returns an empty list:
+
+```sh
+geshtu start file:~/Downloads/talk.mp4
+geshtu start meet:https://meet.google.com/abc-defg-hij
+```
+
+The prefix is matched against installed source names, so PipeWire's own
+`node:163` keys are not mistaken for a source called "node".
+
+⚠️ **A joiner does not have to carry its own audio stack.** The cheap and
+robust shape is to launch a browser into the call with a distinctive PipeWire
+node name, then reuse the derivation the PipeWire source already does: join,
+tap that node, and the rest of the chain is unchanged. Writing a second audio
+path would double the number of places a recording can silently end up empty.
+
+⚠️ **And a joiner is a participant.** It shows up in the attendee list under
+whatever name you give it, and in most jurisdictions recording a conversation
+requires telling the people in it. Name it so that it is obvious what it is.
 
 `stop()` must wait for the writers to exit. A WAV read before its RIFF header
 is finalised makes the ASR return an intermittent HTTP 400 — intermittent

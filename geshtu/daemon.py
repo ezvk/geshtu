@@ -135,8 +135,9 @@ class State:
         """A session records from one source; a file session has nothing to
         stop, and calling PipeWire's stop() on it would hunt for pid files
         that never existed."""
-        if any(t.kind == "file" for t in session.tracks):
-            return self.sources.get("file") or self.source()
+        for track in session.tracks:
+            if track.kind in self.sources:
+                return self.sources[track.kind]
         return self.source()
 
     def targets(self) -> list[dict]:
@@ -155,16 +156,24 @@ class State:
             root = self.cfg.sessions / time.strftime("%Y-%m-%d_%H-%M")
             root.mkdir(parents=True, exist_ok=True)
             session = models.Session(id=root.name, root=root, language=language)
-            # ⚠️ A KEY MAY NAME ITS OWN SOURCE. "file:/path/to/talk.mp4" is
-            # not something any source can enumerate -- a file is named, not
-            # discovered -- so it is resolved here rather than forcing every
-            # source to invent a listing it does not have.
-            if len(keys) == 1 and keys[0].startswith("file:"):
-                src = self.sources.get("file")
-                if src is None:
-                    return {"ok": False, "error": "the file source is not installed"}
-                target = plugins.Target(keys[0][5:], keys[0][5:], "file")
-                known = {keys[0]: target}
+            # ⚠️ A KEY MAY NAME ITS OWN SOURCE, and this is the extension
+            # point rather than a special case for files.
+            #
+            # Some sources have nothing to enumerate because they do not tap
+            # what is already there -- they MAKE it. A file is named, not
+            # discovered. A meeting joiner is handed a URL, opens the call and
+            # produces the audio that did not exist a second earlier. Both are
+            # addressed as "<source>:<whatever that source understands>".
+            #
+            # ⚠️ The prefix is matched against INSTALLED SOURCE NAMES ONLY.
+            # PipeWire's own targets look like "node:163", and "node" is not a
+            # source, so they fall through to the default source instead of
+            # being mistaken for one.
+            prefix = keys[0].split(":", 1)[0] if len(keys) == 1 else ""
+            if prefix and prefix in self.sources and prefix != self.source_name:
+                src = self.sources[prefix]
+                rest = keys[0].split(":", 1)[1]
+                known = {keys[0]: plugins.Target(rest, rest, prefix)}
             else:
                 src = self.source()
                 known = {t.key: t for t in src.targets()}
