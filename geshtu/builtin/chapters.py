@@ -20,8 +20,18 @@ import math
 from geshtu import engines
 from geshtu.models import Chapter
 
-MAX_SLICES = 8          # ~16 min: beyond this a cut is forced
-MIN_SLICES = 2          # ~4 min: avoids stub chapters
+# ⚠️ UN BUDGET DE MOTS, PAS UN NOMBRE DE TRANCHES. La version precedente
+# forcait une coupe toutes les 8 tranches, ce qui tenait tant qu une tranche
+# faisait deux minutes. Depuis que la transcription coupe aussi sur les
+# changements de voix, une tranche fait 55 s en moyenne : le meme 8 forcait
+# une coupe toutes les sept minutes, d ou 22 chapitres sur une conference de
+# 2 h 35 dont quatre portaient le meme titre.
+#
+# La contrainte reelle n a jamais ete un nombre de tranches, c est ce qui
+# tient dans le modele. On la formule donc en mots -- la seule unite qui ait
+# un rapport avec la limite qu on essaie de respecter.
+MAX_MOTS = 4500         # ~6000 jetons : large sur GPU, sous le plafond du NPU
+MIN_SLICES = 2          # evite les chapitres croupions
 MIN_MOTS = 40           # below this, a slice joins its neighbour rather than
                         # deciding a topic boundary on its own
 
@@ -60,7 +70,8 @@ class Chaptering:
         threshold = mean - 0.6 * spread
         report("%d slices, similarity threshold %.3f" % (len(segs), threshold))
 
-        groups = _split([list(range(len(gros)))], scores, threshold)
+        mots = [len(segs[i].text.split()) for i in gros]
+        groups = _split([list(range(len(gros)))], scores, threshold, mots)
         # ⚠️ ON REVIENT AUX BORNES REELLES : les groupes portent des indices
         # dans la liste des tranches RETENUES, pas dans la transcription. Le
         # premier chapitre part du debut et le dernier va jusqu a la fin, pour
@@ -74,15 +85,15 @@ class Chaptering:
         report("%d chapters" % len(session.chapters))
 
 
-def _split(groups, scores, threshold):
+def _split(groups, scores, threshold, mots=None):
     out = []
     for g in groups:
-        out.extend(_one(g, scores, threshold))
+        out.extend(_one(g, scores, threshold, mots))
     return out
 
 
-def _one(idx, scores, threshold):
-    if len(idx) <= MAX_SLICES:
+def _one(idx, scores, threshold, mots=None):
+    if mots is None or sum(mots[i] for i in idx) <= MAX_MOTS:
         return [idx]
     # Force a cut at the deepest similarity trough inside the group, then
     # recurse: this keeps long monologues from becoming one giant chapter.
@@ -92,7 +103,7 @@ def _one(idx, scores, threshold):
     right = [i for i in idx if i > at]
     if not left or not right:
         return [idx]
-    return _one(left, scores, threshold) + _one(right, scores, threshold)
+    return _one(left, scores, threshold, mots) + _one(right, scores, threshold, mots)
 
 
 def _cosine(a, b):
