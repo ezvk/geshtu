@@ -22,7 +22,9 @@ from gi.repository import Gtk   # noqa: E402
 from geshtu.cli import call     # noqa: E402
 from geshtu.cli import hms      # noqa: E402
 
-GROUPS = [("app", "Applications"), ("mic", "Microphones"), ("output", "Outputs")]
+# Streams first, because that is what one actually picks; the two fallbacks
+# after, because they are what one falls back to.
+GROUPS = [("app", "Playing now"), ("mic", ""), ("output", "")]
 
 
 class Window(Gtk.ApplicationWindow):
@@ -109,14 +111,17 @@ class Window(Gtk.ApplicationWindow):
             rows = [t for t in targets if t["kind"] == kind]
             if not rows:
                 continue
-            head = Gtk.Label(label=title, xalign=0)
-            head.add_css_class("dim-label")
-            head.set_margin_top(6)
-            self.list.append(head)
+            if title:
+                head = Gtk.Label(label=title, xalign=0)
+                head.add_css_class("dim-label")
+                head.set_margin_top(6)
+                self.list.append(head)
             for t in rows:
                 label = t["detail"] or t["label"]
                 if kind != "app":
-                    label = t["label"]
+                    # "My microphone — SoundWire microphones": what it is, and
+                    # what it currently resolves to.
+                    label = "%s — %s" % (t["label"], t["detail"])
                 check = Gtk.CheckButton(label=label[:80])
                 check.set_active(t["key"] in self.chosen)
                 check.connect("toggled", self.pick, t["key"])

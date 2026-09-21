@@ -80,63 +80,57 @@ class PipeWireSource:
 
     # -- discovery ------------------------------------------------------
     def targets(self) -> list[plugins.Target]:
-        """One target per NODE, and emphatically not one per application name.
+        """The audio STREAMS, plus two defaults. Not the device list.
 
-        ⚠️ SEVERAL INSTANCES OF THE SAME PROGRAM SHARE A node.name. Measured on
-        a real desktop: three Moonlight windows, all called "Moonlight", each a
-        separate node with its own ports. An earlier version collapsed them
-        into one entry on the theory that duplicates were noise. They were not
-        -- they were three running programs, and merging them meant a request
-        to record one of them would have tapped all three. That is precisely
-        the leakage this source exists to prevent.
+        ezvk, seeing the first version: "tu listes tous les outputs et les
+        micros, il faut juste les flux audio". He was right -- eleven sinks,
+        five of them AirPlay speakers in other rooms, to pick one browser tab.
+        Enumerating hardware is not choosing what to record.
 
-        So an application target is addressed by node id, and derivation links
-        PORT IDS rather than port names: `pw-link Moonlight:output_FL ...`
-        cannot say WHICH Moonlight.
+        So: one entry per playing stream, and exactly two fallbacks -- your
+        microphone and whatever the machine is playing through. A specific
+        device can still be addressed by its node name on the command line;
+        it just does not belong in a list you read while a meeting starts.
+
+        ⚠️ SEVERAL INSTANCES OF THE SAME PROGRAM SHARE A node.name, and
+        several streams of one program do too. Measured: four Firefox streams
+        on one pid, two separate Moonlight windows. So a stream is addressed
+        by node id, and derivation links PORT IDS -- `Firefox:output_FL`
+        cannot say which Firefox, or which tab.
+
+        ⚠️ AND ONLY NODES THAT OWN AN OUTPUT PORT. Four nodes were named
+        "Moonlight" and two carried no port at all: picking one of those links
+        nothing, and the recording is an hour of the capture sink's silence.
         """
-        nodes = _nodes()
         out: list[plugins.Target] = []
-        for obj in _dump():
-            props = ((obj.get("info") or {}).get("props") or {})
-            cls = props.get("media.class")
-            node = props.get("node.name") or ""
-            if not node or cls not in ("Audio/Source", "Audio/Sink"):
-                continue
-            label = props.get("node.description") or node
-            # ⚠️ Devices keep a stable key across reboots -- numeric ids do not
-            # survive a restart, names do. Application streams are the
-            # opposite case: they do not outlive their process, so there is
-            # nothing to remember and precision wins.
-            if cls == "Audio/Source" and "monitor" not in node:
-                out.append(plugins.Target(node, label, "mic"))
-            elif cls == "Audio/Sink" and node != SINK:
-                out.append(plugins.Target(node, label, "output"))
 
+        nodes = _nodes()
+        with_ports = _nodes_with_ports()
         counts: dict[str, int] = {}
         for props in nodes.values():
-            name = props.get("node.name") or ""
-            counts[name] = counts.get(name, 0) + 1
-
-        # ⚠️ ONLY NODES THAT ACTUALLY HAVE OUTPUT PORTS. Measured on utu:
-        # four nodes named "Moonlight" existed, and only two of them carried
-        # any port -- the other two cannot be recorded at all. Offering them
-        # is worse than not listing them, because the user picks one, the
-        # derivation silently produces nothing, and the recording is an hour
-        # of the capture sink's own silence.
-        with_ports = _nodes_with_ports()
+            label = (props.get("media.name") or "").strip()
+            counts[label] = counts.get(label, 0) + 1
         for nid, props in sorted(nodes.items()):
             if nid not in with_ports:
                 continue
-            node = props.get("node.name") or ""
-            app = props.get("application.name") or node
+            app = props.get("application.name") or props.get("node.name") or "?"
             media = (props.get("media.name") or "").strip()
-            detail = media[:70]
-            if counts.get(node, 0) > 1:
-                # ⚠️ Three identical windows are genuinely indistinguishable
-                # from the outside; the node id is the only handle there is.
-                # Showing it beats silently picking one of them.
-                detail = ("%s #%d" % (media, nid)).strip()
-            out.append(plugins.Target("node:%d" % nid, app, "app", detail))
+            # two untitled streams of one program are otherwise
+            # indistinguishable; the node id is the only handle there is
+            if not media or counts.get(media, 0) > 1:
+                media = ("%s #%d" % (media, nid)).strip()
+            out.append(plugins.Target("node:%d" % nid, app, "app", media[:70]))
+
+        # ⚠️ THE DEFAULTS ARE RESOLVED WHEN RECORDING STARTS, NOT HERE. What
+        # the machine plays through changes between reading a list and
+        # pressing record -- plugging in a headset is enough. Resolving at
+        # listing time once cost 22 minutes of a meeting captured from a
+        # speaker nobody was using.
+        mic, sink = _defaults()
+        out.append(plugins.Target("default:mic", "My microphone", "mic",
+                                  mic or "(none found)"))
+        out.append(plugins.Target("default:output", "Everything I hear",
+                                  "output", sink or "(none found)"))
         return out
 
     # -- the tap --------------------------------------------------------
@@ -209,6 +203,19 @@ class PipeWireSource:
         rate, channels = 16000, 1
         wav = session.root / ("%s-%s-%03d.wav" % (target.kind, _safe(target.key), index))
         cmd = ["pw-record", "--rate", str(rate), "--channels", str(channels)]
+
+        # ⚠️ RESOLVED NOW, and named in the returned Track so a wrong source
+        # is visible at the start rather than an hour later.
+        if target.key == "default:mic":
+            mic, _ = _defaults()
+            if not mic:
+                raise RuntimeError("no default microphone")
+            target = plugins.Target(mic, mic, "mic")
+        elif target.key == "default:output":
+            _, sink = _defaults()
+            if not sink:
+                raise RuntimeError("no default output")
+            target = plugins.Target(sink, sink, "output")
 
         node_id = None
         if target.kind == "app":
@@ -315,6 +322,26 @@ def _nodes() -> dict[int, dict]:
             continue
         found[obj["id"]] = props
     return found
+
+
+def _defaults() -> tuple[str, str]:
+    """The node names of the default source and sink, right now.
+
+    Read from the metadata the session manager actually uses, not guessed
+    from a device list: a machine has several plausible microphones and
+    exactly one that is selected.
+    """
+    mic = sink = ""
+    for obj in _dump():
+        if obj.get("type", "").endswith("Metadata"):
+            for entry in obj.get("metadata") or []:
+                key, value = entry.get("key"), entry.get("value")
+                name = value.get("name") if isinstance(value, dict) else value
+                if key == "default.audio.source":
+                    mic = name or mic
+                elif key == "default.audio.sink":
+                    sink = name or sink
+    return mic, sink
 
 
 def _nodes_with_ports() -> set[int]:
