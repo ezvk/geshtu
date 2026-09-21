@@ -40,20 +40,16 @@ from geshtu.cli import hms       # noqa: E402
 
 assert gi  # imported for the typelib side effect
 
-# ⚠️ DEUX CHEMINS, ET CE N EST PAS DE LA SUPERSTITION. La spec dit
-# /StatusNotifierItem ; libayatana publie sous /org/ayatana/NotificationItem,
-# et les hotes qui ont grandi avec lui sondent CE chemin d abord. Mesure sur
-# la machine, journal du shell :
+# ⚠️ UN SEUL CHEMIN, ET LE JOURNAL DU SHELL EST TROMPEUR SUR CE POINT.
+# Il consigne « tray probe failed ... /org/ayatana/NotificationItem : Object
+# does not exist » -- ce n est PAS une panne : l hote essaie d abord le chemin
+# de libayatana, echoue, puis retombe sur celui de la spec et enregistre.
 #
-#     [tray] tray probe failed bus=... path=/org/ayatana/NotificationItem
-#            Object does not exist at path
-#
-# L item etait bien enregistre et le shell ne le rendait pas comme ses
-# voisins -- LocalSend, juste a cote, publie sous le chemin ayatana. On
-# expose le meme objet aux deux endroits : cela ne coute rien et supprime la
-# question de savoir lequel l hote prefere.
+# ⚠️ ET EXPOSER LES DEUX EST PIRE : mesure du 2026-09-21, l hote sonde les
+# deux, les trouve tous les deux, et enregistre DEUX items -- deux icones
+# identiques dans la barre. Une ligne d erreur dans un journal n est pas une
+# invitation a la faire taire.
 PATH = "/StatusNotifierItem"
-PATH_AYATANA = "/org/ayatana/NotificationItem"
 WATCHER = "org.kde.StatusNotifierWatcher"
 IDLE = "audio-input-microphone-symbolic"
 LIVE = "media-record-symbolic"
@@ -106,9 +102,8 @@ class Item:
 
         self.node = Gio.DBusNodeInfo.new_for_xml(XML)
         self.conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-        for chemin in (PATH, PATH_AYATANA):
-            self.conn.register_object(chemin, self.node.interfaces[0],
-                                      self.on_call, self.on_get, None)
+        self.conn.register_object(PATH, self.node.interfaces[0],
+                                  self.on_call, self.on_get, None)
         # ⚠️ THE NAME SHAPE IS PART OF THE SPEC: hosts that predate the
         # "pass your unique name" convention look for exactly this.
         self.name = "org.kde.StatusNotifierItem-%d-1" % os.getpid()
@@ -167,9 +162,8 @@ class Item:
         invocation.return_value(None)
 
     def emit(self, signal, args=None) -> None:
-        for chemin in (PATH, PATH_AYATANA):
-            self.conn.emit_signal(None, chemin, "org.kde.StatusNotifierItem",
-                                  signal, args)
+        self.conn.emit_signal(None, PATH, "org.kde.StatusNotifierItem",
+                              signal, args)
 
     # ----------------------------------------------------------- actions
     def toggle(self) -> None:
