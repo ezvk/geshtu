@@ -1,0 +1,49 @@
+[project]
+name = "geshtu"
+version = "0.1.0"
+description = "Self-hosted meeting intelligence: capture, transcribe and summarise locally on an NPU or GPU"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "ezvk" }]
+keywords = ["meeting", "transcription", "whisper", "npu", "openvino", "self-hosted"]
+
+# No runtime dependencies, and that is a design rule rather than an accident.
+# Everything the core needs is in the standard library: tomllib for config,
+# urllib for the inference endpoints, sockets for the daemon. Compute lives
+# behind HTTP in OpenVINO Model Server, so there is no torch, no CUDA, no
+# 4 GB of wheels. A plugin may depend on whatever it likes; the core may not.
+dependencies = []
+
+[project.optional-dependencies]
+gui = ["PyGObject>=3.50"]
+dev = ["flake8", "pytest"]
+
+[project.scripts]
+geshtu = "geshtu.cli:main"
+geshtud = "geshtu.daemon:main"
+
+# Plugins are discovered through entry points. Anything installed in the same
+# environment that advertises one of these groups is picked up with no
+# registration step and no edit to this project.
+[project.entry-points."geshtu.sources"]
+pipewire = "geshtu.builtin.pipewire:PipeWireSource"
+file = "geshtu.builtin.filesource:FileSource"
+
+[project.entry-points."geshtu.stages"]
+transcribe = "geshtu.builtin.asr:Transcribe"
+chapter = "geshtu.builtin.chapters:Chaptering"
+summarise = "geshtu.builtin.summary:Summarise"
+
+[project.entry-points."geshtu.sinks"]
+markdown = "geshtu.builtin.markdown:MarkdownSink"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["geshtu*"]
+
+[tool.flake8]
+max-line-length = 100
