@@ -164,7 +164,10 @@ class Window(Gtk.ApplicationWindow):
         r = call({"cmd": "models"})
         for name, row in r.get("engines", {}).items():
             line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            line.append(Gtk.Label(label="%s (%s)" % (name, row["device"]), xalign=0))
+            # "declared" plutot que le seul nom : le champ peut mentir.
+            tag = Gtk.Label(label="%s (%s declared)" % (name, row["device"]),
+                            xalign=0)
+            line.append(tag)
             if row.get("error"):
                 warn = Gtk.Label(label="unreachable", xalign=0)
                 warn.add_css_class("error")

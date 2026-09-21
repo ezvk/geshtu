@@ -156,8 +156,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd == "models":
         r = call({"cmd": "models"})
+        # ⚠️ « declared » N EST PAS UN ORNEMENT. `device` est ce que la
+        # configuration AFFIRME, pas ce que le serveur fait : rien ici ne peut
+        # l interroger, et un champ laisse derriere apres un changement de
+        # cote serveur ment sans que rien ne le signale. Le dire dans
+        # l en-tete coute une ligne et evite de croire une etiquette.
+        print("  engine  declared  endpoint")
         for name, row in r.get("engines", {}).items():
-            print("  %-7s %-4s %s" % (name, row["device"], row["endpoint"]))
+            print("  %-7s %-9s %s" % (name, row["device"], row["endpoint"]))
             if row.get("error"):
                 print("      unreachable: %s" % row["error"])
                 continue

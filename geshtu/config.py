@@ -28,11 +28,12 @@ device = "NPU"
 [engines.llm]
 endpoint = "http://localhost:8092/v3/chat/completions"
 model = "qwen3-8b"
-# ⚠️ `device` DESCRIBES where this endpoint runs; it does not move anything.
-# Which accelerator serves a model is decided when the model server is
-# started. This field exists so the pipeline can reason about the endpoint's
-# limits, and so `geshtu models` can tell you what you are actually talking
-# to -- not so a line here can relocate a model.
+# ⚠️ `device` IS A CLAIM, NOT A CONTROL. It does not move anything: which
+# accelerator serves a model is decided when the model server starts. It
+# exists so the pipeline can reason about this endpoint's limits -- and it
+# can therefore be WRONG, which is worse than absent. Measured: this file
+# said CPU for a week after the endpoint had moved to the GPU, and nothing
+# anywhere contradicted it. Check it against the server, not against memory.
 device = "GPU"
 # The prompt ceiling of this endpoint, in tokens. 0 means no known limit.
 #
@@ -52,7 +53,7 @@ endpoint = "http://localhost:8096/v3/embeddings"
 # `geshtu models` prints what each endpoint actually offers; a name that
 # matches nothing fails at the first request, an hour after the recording.
 model = "embeddings"
-device = "CPU"
+device = "GPU"
 
 [pipeline]
 stages = ["transcribe", "chapter", "summarise"]
