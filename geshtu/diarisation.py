@@ -37,6 +37,7 @@ import os
 import time
 import wave
 
+import kaldi_native_fbank as knf
 import numpy as np
 
 FENETRE = 160000          # 10 s a 16 kHz, forme figee du modele
