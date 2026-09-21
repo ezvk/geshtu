@@ -80,6 +80,13 @@ class PipeWireSource:
 
     # -- discovery ------------------------------------------------------
     def targets(self) -> list[plugins.Target]:
+        """⚠️ DEDUPLICATED BY KEY. One application routinely owns several
+        nodes -- a browser opens one per tab, a game client one per mixer
+        channel -- and they all share a node.name. Listing them separately
+        offers the same choice three times, and since derivation matches on
+        the name it would make no difference which one was picked. The richest
+        label wins, so a tab title beats a bare node name.
+        """
         out: list[plugins.Target] = []
         for obj in _dump():
             props = ((obj.get("info") or {}).get("props") or {})
@@ -98,7 +105,13 @@ class PipeWireSource:
                 app = props.get("application.name") or node
                 media = (props.get("media.name") or "").strip()
                 out.append(plugins.Target(node, app, "app", media[:70]))
-        return out
+
+        unique: dict[str, plugins.Target] = {}
+        for t in out:
+            seen = unique.get(t.key)
+            if seen is None or (not seen.detail and t.detail):
+                unique[t.key] = t
+        return list(unique.values())
 
     # -- the tap --------------------------------------------------------
     def _sink_present(self) -> bool:
