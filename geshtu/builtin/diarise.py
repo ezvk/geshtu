@@ -44,37 +44,19 @@ class Diarise:
     provides = ("speakers",)
 
     def run(self, session, cfg, report) -> None:
-        models = os.environ.get("GESHTU_DIARISATION")
-        binary = shutil.which("sherpa-onnx-offline-speaker-diarization")
-        if not models or not binary:
-            # ⚠️ ABSENT IS NOT BROKEN. A pip install has neither the models
-            # nor the tool, and a meeting summary without speaker labels is
-            # still a meeting summary. Say it once and move on.
-            report("diarisation unavailable (no models or no sherpa-onnx)")
-            return
         if not session.mixed or not session.mixed.exists():
             report("nothing to diarise")
             return
-
         opts = cfg.raw.get("diarisation", {})
-        cmd = [
-            binary,
-            "--segmentation.pyannote-model=%s/segmentation.onnx" % models,
-            "--embedding.model=%s/embedding.onnx" % models,
-            "--segmentation.num-threads=%d" % opts.get("threads", 4),
-            "--embedding.num-threads=%d" % opts.get("threads", 4),
-            "--clustering.cluster-threshold=%s" % opts.get("threshold", 0.8),
-            str(session.mixed),
-        ]
-        report("diarising %s" % session.mixed.name)
-        out = subprocess.run(cmd, capture_output=True, text=True)
+        models = os.environ.get("GESHTU_DIARISATION")
+        moteur = opts.get("engine", "openvino")
+
         tours = []
-        for ligne in out.stdout.splitlines():
-            m = LIGNE.match(ligne)
-            if m:
-                tours.append((float(m.group(1)), float(m.group(2)), m.group(3)))
+        if moteur == "openvino" and models:
+            tours = self._openvino(session, models, opts, report)
         if not tours:
-            report("diarisation produced nothing:\n%s" % out.stderr[-400:])
+            tours = self._sherpa(session, models, opts, report)
+        if not tours:
             return
 
         noms = {}
@@ -93,6 +75,62 @@ class Diarise:
                 if part > meilleur:
                     best, meilleur = qui, part
             seg.speaker = noms.get(best) if best else None
+
+    # ------------------------------------------------------------ backends
+    def _openvino(self, session, models, opts, report):
+        """⚠️ THE FAST ONE, AND ALSO THE QUIET ONE. 6.5 s against 128 s for the
+        CPU tool on a 30-minute meeting, with the fan untouched."""
+        if not os.path.exists(os.path.join(models, "segmentation.xml")):
+            return []
+        try:
+            from geshtu import diarisation
+        except ImportError as exc:
+            report("openvino diarisation unavailable: %s" % exc)
+            return []
+        try:
+            return diarisation.analyse(
+                session.mixed, models,
+                seuil=opts.get("threshold", 0.5),
+                device=opts.get("device", "NPU"),
+                trace=report)
+        except Exception as exc:                          # noqa: BLE001
+            # ⚠️ ON RETOMBE PLUTOT QUE D ECHOUER : la diarisation est un
+            # agrement, la transcription est le produit. Perdre l une ne doit
+            # pas coûter l autre.
+            report("openvino diarisation failed (%s) -- trying the CPU tool" % exc)
+            return []
+
+    def _sherpa(self, session, models, opts, report):
+        """Le temoin : l outil qui a servi de reference pendant le portage.
+        Plus lent, entierement CPU, mais il livre la chaine complete."""
+        binary = shutil.which("sherpa-onnx-offline-speaker-diarization")
+        if not models or not binary:
+            report("diarisation unavailable (no models or no sherpa-onnx)")
+            return []
+        if not os.path.exists(os.path.join(models, "segmentation.onnx")):
+            return []
+        cmd = [
+            binary,
+            "--segmentation.pyannote-model=%s/segmentation.onnx" % models,
+            "--embedding.model=%s/embedding.onnx" % models,
+            "--segmentation.num-threads=%d" % opts.get("threads", 4),
+            "--embedding.num-threads=%d" % opts.get("threads", 4),
+            # ⚠️ LE DEFAUT AMONT EST 0.5, et plus grand veut dire MOINS de
+            # groupes. Un commentaire precedent disait l inverse.
+            "--clustering.cluster-threshold=%s" % opts.get("threshold", 0.5),
+            str(session.mixed),
+        ]
+        report("diarising with sherpa-onnx (CPU)")
+        out = subprocess.run(cmd, capture_output=True, text=True)
+        tours, noms = [], {}
+        for ligne in out.stdout.splitlines():
+            m = LIGNE.match(ligne)
+            if m:
+                qui = noms.setdefault(m.group(3), len(noms))
+                tours.append((float(m.group(1)), float(m.group(2)), qui))
+        if not tours:
+            report("sherpa produced nothing:\n%s" % out.stderr[-400:])
+        return tours
 
 
 PLUGIN = Diarise

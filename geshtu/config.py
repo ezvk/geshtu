@@ -57,8 +57,10 @@ device = "GPU"
 
 # Who spoke when. Absent models simply skip the stage.
 # [diarisation]
-# threads = 4
-# threshold = 0.8     # lower splits one voice in two, higher merges people
+# engine = "openvino"   # or "sherpa", the CPU tool kept as a reference
+# device = "NPU"        # measured fastest of the three, and silent
+# threshold = 0.5       # HIGHER merges speakers, lower splits one voice in two
+# threads = 4           # sherpa only
 
 [pipeline]
 stages = ["transcribe", "diarise", "chapter", "summarise"]
