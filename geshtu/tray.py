@@ -1,177 +1,215 @@
-"""The tray icon.
+"""The tray icon, as a StatusNotifierItem spoken directly over D-Bus.
 
-⚠️ A SEPARATE PROCESS FROM THE WINDOW, and not as a matter of taste.
-libayatana-appindicator builds its menu with GTK 3; the window is GTK 4. The
-two cannot be loaded into one process — gi refuses the second
-require_version. So the indicator launches the window rather than containing
-it, which suits an architecture where neither holds any state: both ask the
-daemon.
+⚠️ WHY NOT libayatana-appindicator, WHICH IS THE OBVIOUS CHOICE. Because it
+does not implement `Activate`. Introspected on the real object:
 
-⚠️ AND THE HOST MAY HIDE IT. Some shells put tray items in a drawer rather
-than in the bar; a registered item that nobody can see looks exactly like an
-item that failed to register. The check that settles it is the bus, not the
-screen:
+    org.kde.StatusNotifierItem
+      .Scroll .SecondaryActivate .XAyatanaSecondaryActivate
+      (no Activate, no ItemIsMenu)
 
-    busctl --user call org.kde.StatusNotifierWatcher /StatusNotifierWatcher \
-      org.freedesktop.DBus.Properties Get ss \
-      org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems
+Its model is "the menu IS the interaction". A host that follows the spec calls
+`Activate` on left click, gets `UnknownMethod`, and does nothing — which is
+exactly what the shell log said:
+
+    [tray] activate failed err=[org.freedesktop.DBus.Error.UnknownMethod]
+           La méthode « Activate » n'existe pas
+
+ezvk: "regarde un tray icone standard comme celui de syncthing ou localsend,
+ils sont ok". They are, because they implement Activate. So does this now.
+
+⚠️ AND IT DROPS TWO DEPENDENCIES. No GTK 3, no libayatana: the interaction is
+click to open the window, middle click to start or stop. Nothing here needs a
+menu, so nothing here needs a toolkit — GLib alone speaks D-Bus. That also
+ends the GTK 3 / GTK 4 split that forced this into a separate process for
+technical rather than useful reasons; it stays separate because a tray icon
+must outlive the window, which is a better reason.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 
 import gi
 
-gi.require_version("Gtk", "3.0")
-gi.require_version("AyatanaAppIndicator3", "0.1")
+from gi.repository import Gio    # noqa: E402
+from gi.repository import GLib   # noqa: E402
 
-from gi.repository import AyatanaAppIndicator3 as Indicator  # noqa: E402
-from gi.repository import GLib  # noqa: E402
-from gi.repository import Gtk   # noqa: E402
+from geshtu.cli import call      # noqa: E402
+from geshtu.cli import hms       # noqa: E402
 
-from geshtu.cli import call     # noqa: E402
-from geshtu.cli import hms      # noqa: E402
+assert gi  # imported for the typelib side effect
 
+PATH = "/StatusNotifierItem"
+WATCHER = "org.kde.StatusNotifierWatcher"
 IDLE = "audio-input-microphone-symbolic"
 LIVE = "media-record-symbolic"
 
+XML = """
+<node>
+  <interface name="org.kde.StatusNotifierItem">
+    <property name="Category" type="s" access="read"/>
+    <property name="Id" type="s" access="read"/>
+    <property name="Title" type="s" access="read"/>
+    <property name="Status" type="s" access="read"/>
+    <property name="IconName" type="s" access="read"/>
+    <property name="AttentionIconName" type="s" access="read"/>
+    <property name="OverlayIconName" type="s" access="read"/>
+    <property name="IconThemePath" type="s" access="read"/>
+    <property name="ItemIsMenu" type="b" access="read"/>
+    <property name="Menu" type="o" access="read"/>
+    <property name="ToolTip" type="(sa(iiay)ss)" access="read"/>
+    <method name="Activate">
+      <arg name="x" type="i" direction="in"/>
+      <arg name="y" type="i" direction="in"/>
+    </method>
+    <method name="SecondaryActivate">
+      <arg name="x" type="i" direction="in"/>
+      <arg name="y" type="i" direction="in"/>
+    </method>
+    <method name="ContextMenu">
+      <arg name="x" type="i" direction="in"/>
+      <arg name="y" type="i" direction="in"/>
+    </method>
+    <method name="Scroll">
+      <arg name="delta" type="i" direction="in"/>
+      <arg name="orientation" type="s" direction="in"/>
+    </method>
+    <signal name="NewIcon"/>
+    <signal name="NewToolTip"/>
+    <signal name="NewStatus"><arg name="status" type="s"/></signal>
+  </interface>
+</node>
+"""
 
-class Tray:
+
+class Item:
 
     def __init__(self):
         self.recording = False
         self.busy = False
-        self.summary = "…"
-        self.chosen: str | None = None
-        self.targets: list[dict] = []
-        self.signature = None
-        self.language = "en"
+        self.summary = "idle"
+        self.status = "Active"
 
-        self.ind = Indicator.Indicator.new(
-            "geshtu", IDLE, Indicator.IndicatorCategory.APPLICATION_STATUS)
-        self.ind.set_status(Indicator.IndicatorStatus.ACTIVE)
-        self.ind.set_title("geshtu")
-        self.ind.set_attention_icon_full(LIVE, "recording")
-        self.rebuild()
-        GLib.timeout_add_seconds(3, self.tick)
+        self.node = Gio.DBusNodeInfo.new_for_xml(XML)
+        self.conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self.conn.register_object(PATH, self.node.interfaces[0],
+                                  self.on_call, self.on_get, None)
+        # ⚠️ THE NAME SHAPE IS PART OF THE SPEC: hosts that predate the
+        # "pass your unique name" convention look for exactly this.
+        self.name = "org.kde.StatusNotifierItem-%d-1" % os.getpid()
+        Gio.bus_own_name_on_connection(
+            self.conn, self.name, Gio.BusNameOwnerFlags.NONE,
+            lambda *_: self.register(), None)
 
-    def rebuild(self) -> None:
-        menu = Gtk.Menu()
-        head = Gtk.MenuItem(label=self.summary)
-        head.set_sensitive(False)
-        menu.append(head)
-        menu.append(Gtk.SeparatorMenuItem())
+    def register(self) -> None:
+        try:
+            self.conn.call_sync(
+                WATCHER, "/StatusNotifierWatcher", WATCHER,
+                "RegisterStatusNotifierItem", GLib.Variant("(s)", (self.name,)),
+                None, Gio.DBusCallFlags.NONE, 3000, None)
+        except GLib.Error as exc:
+            # ⚠️ NOT FATAL, and worth saying rather than dying: a shell may
+            # start after us. The watcher name appearing later is handled by
+            # the retry below, and a host that never appears leaves a working
+            # daemon with an invisible icon rather than no daemon at all.
+            print("geshtu-tray: no tray host yet (%s)" % exc.message)
 
+    # ------------------------------------------------------------ D-Bus
+    def on_get(self, _conn, _sender, _path, _iface, prop):
+        if prop == "Category":
+            return GLib.Variant("s", "ApplicationStatus")
+        if prop == "Id":
+            return GLib.Variant("s", "geshtu")
+        if prop == "Title":
+            return GLib.Variant("s", "geshtu")
+        if prop == "Status":
+            return GLib.Variant("s", self.status)
+        if prop == "IconName":
+            return GLib.Variant("s", LIVE if self.recording else IDLE)
+        if prop == "AttentionIconName":
+            return GLib.Variant("s", LIVE)
+        if prop in ("OverlayIconName", "IconThemePath"):
+            return GLib.Variant("s", "")
+        if prop == "ItemIsMenu":
+            # ⚠️ false, AND IT MATTERS: it tells the host "I answer Activate,
+            # do not go looking for a menu". An item that says true and has no
+            # menu object is a dead icon.
+            return GLib.Variant("b", False)
+        if prop == "Menu":
+            return GLib.Variant("o", "/NO_DBUSMENU")
+        if prop == "ToolTip":
+            return GLib.Variant("(sa(iiay)ss)",
+                                (IDLE, [], "geshtu", self.summary))
+        return None
+
+    def on_call(self, _conn, _sender, _path, _iface, method, _params, invocation):
+        if method == "Activate":
+            subprocess.Popen(["geshtu-gui"], start_new_session=True)
+        elif method == "SecondaryActivate":
+            self.toggle()
+        elif method == "ContextMenu":
+            subprocess.Popen(["geshtu-gui"], start_new_session=True)
+        invocation.return_value(None)
+
+    def emit(self, signal, args=None) -> None:
+        self.conn.emit_signal(None, PATH, "org.kde.StatusNotifierItem",
+                              signal, args)
+
+    # ----------------------------------------------------------- actions
+    def toggle(self) -> None:
         if self.busy:
-            item = Gtk.MenuItem(label="Working on the accelerator…")
-            item.set_sensitive(False)
-            menu.append(item)
-        else:
-            item = Gtk.MenuItem(
-                label="Stop and summarise" if self.recording else "Start recording")
-            item.connect("activate", self.toggle)
-            item.set_sensitive(self.recording or self.chosen is not None)
-            menu.append(item)
-
-        menu.append(Gtk.SeparatorMenuItem())
-        sources = Gtk.MenuItem(label="Source")
-        sub = Gtk.Menu()
-        # ⚠️ RADIO, NOT CHECK, and the microphone kept out of the list. One
-        # records ONE source; whether one's own voice goes in with it is a
-        # different question, and putting both in the same list makes two
-        # unlike decisions look alike.
-        first = None
-        rows = list(self.targets)
-        for t in rows:
-            if t["kind"] == "app":
-                text = "%s — %s" % (t["label"], t["detail"] or "")
-            else:
-                text = t["label"]
-            entry = Gtk.RadioMenuItem.new_with_label([], text[:58].strip(" —"))
-            if first is None:
-                first = entry
-            else:
-                entry.join_group(first)
-            entry.set_active(t["key"] == self.chosen)
-            entry.set_sensitive(not self.recording)
-            entry.connect("toggled", self.pick, t["key"])
-            sub.append(entry)
-        if not rows:
-            empty = Gtk.MenuItem(label="nothing is playing")
-            empty.set_sensitive(False)
-            sub.append(empty)
-        sources.set_submenu(sub)
-        sources.set_sensitive(not self.recording)
-        menu.append(sources)
-
-
-        menu.append(Gtk.SeparatorMenuItem())
-        window = Gtk.MenuItem(label="Open the window…")
-        window.connect("activate", lambda *_: subprocess.Popen(
-            ["geshtu-gui"], start_new_session=True))
-        menu.append(window)
-        quit_ = Gtk.MenuItem(label="Quit the indicator")
-        quit_.connect("activate", lambda *_: Gtk.main_quit())
-        menu.append(quit_)
-
-        menu.show_all()
-        self.ind.set_menu(menu)
-
-    def pick(self, item, key) -> None:
-        if item.get_active():
-            self.chosen = key
-
-    def toggle(self, _item) -> None:
+            return
         if self.recording:
             call({"cmd": "stop"})
         else:
-            call({"cmd": "start", "targets": [self.chosen],
-                  "language": self.language})
+            # ⚠️ NO SOURCE PICKER HERE, and that is deliberate: an application
+            # stream cannot be chosen from an icon, and guessing one would
+            # record the wrong thing silently. Without a prior choice the
+            # daemon refuses and says so; the window is where one chooses.
+            call({"cmd": "start", "targets": ["default:output"],
+                  "language": "fr"})
         self.tick()
 
+    # ------------------------------------------------------------- state
     def tick(self) -> bool:
         def work():
-            status = call({"cmd": "status"})
-            targets = call({"cmd": "targets"}).get("targets", [])
-            GLib.idle_add(self.apply, status, targets)
+            GLib.idle_add(self.apply, call({"cmd": "status"}))
         threading.Thread(target=work, daemon=True).start()
         return True
 
-    def apply(self, status, targets) -> bool:
-        self.recording = bool(status.get("recording"))
-        self.busy = bool(status.get("processing"))
-        self.targets = targets
-        # ⚠️ Keep the selection by KEY: the list moves as soon as an
-        # application starts or stops, and keeping a position would silently
-        # record something else.
-        live = {t["key"] for t in targets}
-        if self.chosen not in live:
-            # ⚠️ Keep the choice by KEY and fall back visibly: the list moves
-            # as soon as an application starts or stops, and silently sliding
-            # onto a neighbour would record the wrong thing.
-            self.chosen = sorted(live)[0] if live else None
+    def apply(self, r) -> bool:
+        was_rec, was_status = self.recording, self.status
+        self.recording = bool(r.get("recording"))
+        self.busy = bool(r.get("processing"))
         if self.recording:
-            self.summary = "recording — %s" % hms(status.get("duration", 0))
+            self.summary = "recording — %s" % hms(r.get("duration", 0))
+            self.status = "NeedsAttention"
         elif self.busy:
-            self.summary = "processing %s" % status["processing"]
+            self.summary = "processing %s" % r["processing"]
+            self.status = "Active"
         else:
             self.summary = "idle"
-        self.ind.set_status(Indicator.IndicatorStatus.ATTENTION if self.recording
-                            else Indicator.IndicatorStatus.ACTIVE)
-        self.ind.set_label(hms(status.get("duration", 0)) if self.recording else "",
-                           "00:00:00")
-        sig = "%s|%s|%s|%s" % (self.recording, self.busy, self.summary,
-                               [t["key"] for t in targets])
-        if sig != self.signature:
-            self.signature = sig
-            self.rebuild()
+            self.status = "Active"
+        if self.recording != was_rec:
+            self.emit("NewIcon")
+        if self.status != was_status:
+            self.emit("NewStatus", GLib.Variant("(s)", (self.status,)))
+        self.emit("NewToolTip")
         return False
 
 
 def main() -> int:
-    Tray()
-    Gtk.main()
+    item = Item()
+    item.tick()
+    GLib.timeout_add_seconds(3, item.tick)
+    # ⚠️ Re-register when a shell restarts: noctalia, or any host, drops every
+    # item when it dies, and an icon that never comes back looks like a crash
+    # in this process instead of a restart in that one.
+    Gio.bus_watch_name_on_connection(
+        item.conn, WATCHER, Gio.BusNameWatcherFlags.NONE,
+        lambda *_: item.register(), None)
+    GLib.MainLoop().run()
     return 0
 
 
