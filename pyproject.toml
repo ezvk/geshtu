@@ -23,6 +23,13 @@ dev = ["flake8", "pytest"]
 geshtu = "geshtu.cli:main"
 geshtud = "geshtu.daemon:main"
 
+# ⚠️ These two need PyGObject and the GTK typelibs, which pip cannot install.
+# They are declared here so a packaged build wires them, and they simply fail
+# to import on a bare `pip install geshtu` -- which is honest: the CLI and the
+# daemon work everywhere, the interfaces need a desktop.
+geshtu-gui = "geshtu.gui:main"
+geshtu-tray = "geshtu.tray:main"
+
 # Plugins are discovered through entry points. Anything installed in the same
 # environment that advertises one of these groups is picked up with no
 # registration step and no edit to this project.
