@@ -63,7 +63,12 @@ device = "GPU"
 # threads = 4           # sherpa only
 
 [pipeline]
-stages = ["transcribe", "diarise", "chapter", "summarise"]
+# ⚠️ `diarise` AVANT `transcribe`, ET CE N EST PAS INDIFFERENT. Les tranches
+# de transcription sont coupees sur les SILENCES, les tours de parole sur les
+# CHANGEMENTS DE VOIX. Transcrire d abord fige une grille de deux minutes dans
+# laquelle une interjection de trois secondes ne peut pas exister : mesure du
+# 2026-09-21, trois locuteurs trouves et une seule etiquette dans la note.
+stages = ["diarise", "transcribe", "chapter", "summarise"]
 sinks = ["markdown"]
 
 # Dropping a model in a folder and having it served. The server must be

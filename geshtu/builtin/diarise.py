@@ -35,17 +35,19 @@ import re
 import shutil
 import subprocess
 
+from geshtu import audio
+from geshtu.models import Turn
+
 LIGNE = re.compile(r"^\s*([\d.]+)\s*--\s*([\d.]+)\s+(\S+)\s*$")
 
 
 class Diarise:
     name = "diarise"
-    requires = ("segments",)
-    provides = ("speakers",)
+    requires = ()
+    provides = ("turns",)
 
     def run(self, session, cfg, report) -> None:
-        if not session.mixed or not session.mixed.exists():
-            report("nothing to diarise")
+        if not audio.ensure_mixed(session, cfg, report):
             return
         opts = cfg.raw.get("diarisation", {})
         models = os.environ.get("GESHTU_DIARISATION")
@@ -63,24 +65,7 @@ class Diarise:
         for _, _, qui in tours:
             noms.setdefault(qui, "Speaker %d" % (len(noms) + 1))
         report("%d turns, %d speakers" % (len(tours), len(noms)))
-
-        # ⚠️ ATTRIBUTION BY LARGEST OVERLAP, not by whoever starts first. A
-        # transcript slice is cut on silence and a speech turn is cut on voice
-        # activity: the two grids do not line up, and a slice routinely begins
-        # inside the previous person's tail.
-        for seg in session.segments:
-            best, meilleur = None, 0.0
-            for debut, fin, qui in tours:
-                part = min(seg.end, fin) - max(seg.start, debut)
-                if part > meilleur:
-                    best, meilleur = qui, part
-            # ⚠️ `is not None`, ET PAS UN TEST DE VERITE. `best` est un
-            # NUMERO de locuteur, et le locuteur 0 est falsy : avec `if best`,
-            # l orateur principal -- celui qui porte la quasi-totalite de la
-            # reunion -- repassait a None et la note sortait sans aucune
-            # attribution. Le symptome etait « la diarisation ne marche pas »
-            # alors qu elle avait parfaitement marche.
-            seg.speaker = noms.get(best) if best is not None else None
+        session.turns = [Turn(d, f, noms[q]) for d, f, q in tours]
 
     # ------------------------------------------------------------ backends
     def _openvino(self, session, models, opts, report):

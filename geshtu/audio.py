@@ -95,6 +95,28 @@ def mix(tracks: list[list[pathlib.Path]], dst: pathlib.Path,
     return True
 
 
+def ensure_mixed(session, cfg, report) -> bool:
+    """Produce session.mixed if it is not there yet.
+
+    ⚠️ IT USED TO LIVE IN THE TRANSCRIPTION STAGE, which was fine only as
+    long as transcription came first. Diarisation now runs before it and
+    needs the same file: a helper both call keeps one place where tracks are
+    mixed, and one place to get it wrong.
+    """
+    if session.mixed and session.mixed.exists():
+        return True
+    session.mixed = session.root / "mixed.wav"
+    # ⚠️ EVERY track, taken from the session itself rather than from a
+    # hardcoded list of kinds. Such a list went stale once and silently
+    # dropped a whole track at mix time while its per-segment level was
+    # still being reported as healthy.
+    if not mix([t.segments for t in session.tracks], session.mixed, cfg.rate):
+        report("no audio to work with")
+        session.mixed = None
+        return False
+    return True
+
+
 def silence_cuts(path: pathlib.Path, threshold: str = "-30dB",
                  minimum: float = 0.4) -> list[float]:
     """Where the speech pauses, in seconds.
