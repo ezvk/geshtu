@@ -74,7 +74,13 @@ class Diarise:
                 part = min(seg.end, fin) - max(seg.start, debut)
                 if part > meilleur:
                     best, meilleur = qui, part
-            seg.speaker = noms.get(best) if best else None
+            # ⚠️ `is not None`, ET PAS UN TEST DE VERITE. `best` est un
+            # NUMERO de locuteur, et le locuteur 0 est falsy : avec `if best`,
+            # l orateur principal -- celui qui porte la quasi-totalite de la
+            # reunion -- repassait a None et la note sortait sans aucune
+            # attribution. Le symptome etait « la diarisation ne marche pas »
+            # alors qu elle avait parfaitement marche.
+            seg.speaker = noms.get(best) if best is not None else None
 
     # ------------------------------------------------------------ backends
     def _openvino(self, session, models, opts, report):
