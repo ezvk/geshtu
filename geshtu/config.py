@@ -37,7 +37,10 @@ max_prompt = 8192
 
 [engines.embed]
 endpoint = "http://localhost:8096/v3/embeddings"
-model = "bge-m3"
+# The name the SERVER serves, which is rarely the name of the weights.
+# `geshtu models` prints what each endpoint actually offers; a name that
+# matches nothing fails at the first request, an hour after the recording.
+model = "embeddings"
 device = "CPU"
 
 [pipeline]
@@ -72,6 +75,23 @@ class Config:
         except KeyError:
             raise SystemExit(
                 "no engine named %r; declare [engines.%s] in the config" % (name, name))
+
+    def with_models(self, chosen: dict) -> "Config":
+        """A copy of this config with some engines pointed at another model.
+
+        ⚠️ WHICH MODEL IS RUNNING CHANGES UNDER YOU. A model server is
+        reconfigured, a model is swapped for a smaller one to free the
+        accelerator, a name gains a version suffix. Pinning the name in a file
+        that only a rebuild can change turns an ordinary Tuesday into an
+        outage, so the choice is runtime state, kept beside the sessions.
+        """
+        if not chosen:
+            return self
+        engines = {}
+        for name, eng in self.engines.items():
+            engines[name] = dataclasses.replace(eng, model=chosen[name]) \
+                if chosen.get(name) else eng
+        return dataclasses.replace(self, engines=engines)
 
 
 def path() -> pathlib.Path:

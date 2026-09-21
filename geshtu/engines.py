@@ -8,6 +8,31 @@ import urllib.request
 import uuid
 
 
+def available(engine) -> list[dict]:
+    """The models this endpoint currently serves, with their state.
+
+    ⚠️ THE MANAGEMENT API STAYS ON /v1 even on a server whose inference routes
+    are /v3. Asking /v3/config returns 404 and reads exactly like a server
+    that is down, which is a long way to travel for a wrong conclusion.
+
+    ⚠️ AND "LOADED" IS NOT "USABLE": a model server reports a model as present
+    while it is still compiling for an accelerator. The state is returned
+    alongside the name rather than filtered out, so the caller can say so.
+    """
+    base = engine.endpoint.split("/v1/")[0].split("/v3/")[0].rstrip("/")
+    try:
+        with urllib.request.urlopen(base + "/v1/config", timeout=10) as resp:
+            raw = json.loads(resp.read())
+    except Exception as exc:                            # noqa: BLE001
+        raise RuntimeError("%s unreachable: %s" % (base, exc))
+    out = []
+    for name, info in sorted(raw.items()):
+        versions = info.get("model_version_status") or []
+        state = versions[0].get("state") if versions else "?"
+        out.append({"name": name, "state": state})
+    return out
+
+
 def transcribe(engine, path: pathlib.Path) -> str:
     """One audio file in, text out.
 

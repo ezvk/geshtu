@@ -239,30 +239,37 @@ class PipeWireSource:
             if self._derive(node_id, session) == 0:
                 raise RuntimeError(
                     "could not derive that stream -- nothing was linked")
-            self._watch(node_id, props.get("application.process.id"), session)
+            self._watch(node_id, props, session)
 
         return Track(kind=target.kind, source=target.label, segments=[wav])
 
-    def _watch(self, node_id: int, pid, session) -> None:
+    def _watch(self, node_id: int, props: dict, session) -> None:
         """Re-derive every two seconds.
 
-        ⚠️ WHY A LOOP AND NOT A SINGLE LINK. An application opens a NEW node
-        for every stream: a reloaded tab, a restarted call, an advert slotted
-        in. The original link dies with the old node, and from then on you
-        record silence -- while everything still looks healthy.
+        ⚠️ WHY A LOOP AND NOT A SINGLE LINK. A reloaded tab, a restarted call
+        or an advert slotted in opens a NEW node; the original link dies with
+        the old one and from then on you record silence, while everything
+        still looks healthy.
 
-        ⚠️ AND WHAT THE LOOP FOLLOWS DEPENDS ON WHAT THE PROGRAM EXPOSES.
-        With a process id it follows the PROCESS, so a new tab of the same
-        browser is picked up while a second copy of the program is not.
-        Without one -- Moonlight publishes no application.process.id, measured
-        -- it can only follow that single node, and when the node goes, the
-        derivation ends. Claiming otherwise would be worse than the limit.
+        ⚠️ AND IT FOLLOWS THE NODE, NOT THE PROCESS. Following the process id
+        is the obvious way to survive a reload -- and it is wrong here.
+        Measured: four Firefox streams, four different tabs, ALL on pid 40428.
+        Following that pid would quietly fold every other tab into the
+        recording, which is the exact leakage this source exists to prevent.
+
+        So: the node while it lives, and if it dies, one attempt to re-acquire
+        by (process, stream title) -- which catches a reload without catching
+        its neighbours.
         """
-        script = (session.root / "watch.py")
+        spec = {
+            "node": node_id,
+            "pid": props.get("application.process.id"),
+            "media": props.get("media.name"),
+        }
+        script = session.root / "watch.py"
         script.write_text(WATCHER)
         proc = subprocess.Popen(
-            [sys.executable, str(script), str(session.root), str(node_id),
-             "" if pid is None else str(pid)],
+            [sys.executable, str(script), str(session.root), json.dumps(spec)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True)
         (session.root / "watch.pid").write_text(str(proc.pid))
@@ -348,8 +355,8 @@ import subprocess
 import sys
 import time
 
-root, node_id = pathlib.Path(sys.argv[1]), int(sys.argv[2])
-pid = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else None
+root = pathlib.Path(sys.argv[1])
+spec = json.loads(sys.argv[2])
 SINK = "%s"
 
 
@@ -361,41 +368,54 @@ def dump():
         return []
 
 
+def resolve(objs, props_of):
+    \"\"\"The node to derive right now: the one chosen, or its replacement
+    after a reload -- same process AND same title, never the process alone.\"\"\"
+    live = set()
+    for oid, p in props_of.items():
+        if p.get("media.class") == "Stream/Output/Audio":
+            live.add(oid)
+    if spec["node"] in live:
+        return spec["node"]
+    for oid in sorted(live):
+        p = props_of[oid]
+        if spec.get("pid") is not None:
+            if p.get("application.process.id") != spec["pid"]:
+                continue
+        if spec.get("media") and p.get("media.name") == spec["media"]:
+            spec["node"] = oid
+            return oid
+    return None
+
+
 while (root / "watch.pid").exists():
     objs = dump()
-    props_of = {}
-    for o in objs:
-        props_of[o.get("id")] = ((o.get("info") or {}).get("props") or {})
-    wanted = set()
-    for oid, p in props_of.items():
-        if p.get("media.class") != "Stream/Output/Audio":
-            continue
-        if pid is not None and p.get("application.process.id") == pid:
-            wanted.add(oid)
-        elif pid is None and oid == node_id:
-            wanted.add(oid)
-    tap = {}
-    for o in objs:
-        if not o.get("type", "").endswith("Port"):
-            continue
-        p = (o.get("info") or {}).get("props") or {}
-        holder = props_of.get(p.get("node.id"), {})
-        if holder.get("node.name") == SINK and p.get("port.direction") == "in":
-            tap[p.get("port.name")] = o["id"]
-    for o in objs:
-        if not o.get("type", "").endswith("Port"):
-            continue
-        p = (o.get("info") or {}).get("props") or {}
-        if p.get("node.id") not in wanted or p.get("port.direction") != "out":
-            continue
-        chan = (p.get("port.name") or "").rsplit("_", 1)[-1]
-        dst = tap.get("playback_" + (chan if chan in ("FL", "FR") else "FL"))
-        if dst is None:
-            continue
-        r = subprocess.run(["pw-link", str(o["id"]), str(dst)], capture_output=True)
-        if r.returncode == 0:
-            with (root / "links.tsv").open("a") as fh:
-                fh.write("%%d\\t%%d\\n" %% (o["id"], dst))
+    props_of = {o.get("id"): ((o.get("info") or {}).get("props") or {}) for o in objs}
+    node = resolve(objs, props_of)
+    if node is not None:
+        tap = {}
+        for o in objs:
+            if not o.get("type", "").endswith("Port"):
+                continue
+            p = (o.get("info") or {}).get("props") or {}
+            holder = props_of.get(p.get("node.id"), {})
+            if holder.get("node.name") == SINK and p.get("port.direction") == "in":
+                tap[p.get("port.name")] = o["id"]
+        for o in objs:
+            if not o.get("type", "").endswith("Port"):
+                continue
+            p = (o.get("info") or {}).get("props") or {}
+            if p.get("node.id") != node or p.get("port.direction") != "out":
+                continue
+            chan = (p.get("port.name") or "").rsplit("_", 1)[-1]
+            dst = tap.get("playback_" + (chan if chan in ("FL", "FR") else "FL"))
+            if dst is None:
+                continue
+            r = subprocess.run(["pw-link", str(o["id"]), str(dst)],
+                               capture_output=True)
+            if r.returncode == 0:
+                with (root / "links.tsv").open("a") as fh:
+                    fh.write("%%d\\t%%d\\n" %% (o["id"], dst))
     time.sleep(2)
 """ % SINK
 

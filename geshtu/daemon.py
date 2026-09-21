@@ -29,6 +29,7 @@ import time
 import traceback
 
 from geshtu import config
+from geshtu import engines
 from geshtu import models
 from geshtu import pipeline
 from geshtu import plugins
@@ -51,7 +52,55 @@ class State:
         self.log: list[str] = []
         self.jobs: queue.Queue = queue.Queue()
         self.sources = {n: c() for n, c in plugins.sources().items()}
+        self.models = self._load_models()
         threading.Thread(target=self._worker, daemon=True).start()
+
+    # -- model choice ---------------------------------------------------
+    #
+    # Kept beside the sessions rather than in the config file: the config is
+    # what the machine is set up to have, this is what is loaded right now.
+
+    def _models_path(self) -> pathlib.Path:
+        return self.cfg.sessions / "engines.json"
+
+    def _load_models(self) -> dict:
+        try:
+            return json.loads(self._models_path().read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def active(self) -> config.Config:
+        """The config as it stands, with any chosen models applied."""
+        return self.cfg.with_models(self.models)
+
+    def set_model(self, engine: str, model: str) -> dict:
+        if engine not in self.cfg.engines:
+            return {"ok": False, "error": "no engine named %r" % engine}
+        try:
+            offered = [m["name"] for m in engines.available(self.cfg.engine(engine))]
+        except RuntimeError as exc:
+            return {"ok": False, "error": str(exc)}
+        if model not in offered:
+            return {"ok": False,
+                    "error": "%r does not serve %r (it has: %s)"
+                             % (engine, model, ", ".join(offered) or "nothing")}
+        self.models[engine] = model
+        self._models_path().parent.mkdir(parents=True, exist_ok=True)
+        self._models_path().write_text(json.dumps(self.models, indent=2))
+        self.report("engine %s -> %s" % (engine, model))
+        return {"ok": True, "engine": engine, "model": model}
+
+    def list_models(self) -> dict:
+        out = {}
+        for name, eng in sorted(self.cfg.engines.items()):
+            row = {"device": eng.device, "endpoint": eng.endpoint,
+                   "current": self.models.get(name, eng.model)}
+            try:
+                row["available"] = engines.available(eng)
+            except RuntimeError as exc:
+                row["error"] = str(exc)
+            out[name] = row
+        return {"ok": True, "engines": out}
 
     # -- reporting ------------------------------------------------------
     def report(self, line: str) -> None:
@@ -68,7 +117,7 @@ class State:
             with self.lock:
                 self.busy = session.id
             try:
-                pipeline.process(session, self.cfg, self.report)
+                pipeline.process(session, self.active(), self.report)
             except Exception:                            # noqa: BLE001
                 self.report(traceback.format_exc())
             finally:
@@ -234,6 +283,10 @@ class Handler(socketserver.StreamRequestHandler):
             return {"ok": True, "sessions": st.sessions()}
         if cmd == "reprocess":
             return st.reprocess(msg["session"])
+        if cmd == "models":
+            return st.list_models()
+        if cmd == "set-model":
+            return st.set_model(msg["engine"], msg["model"])
         if cmd == "ping":
             return {"ok": True}
         return {"ok": False, "error": "unknown command %r" % cmd}

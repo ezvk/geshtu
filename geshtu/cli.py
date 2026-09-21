@@ -16,6 +16,8 @@ USAGE = """geshtu — self-hosted meeting intelligence
   geshtu status                    what is recording or processing
   geshtu sessions                  past sessions
   geshtu reprocess <id>            run the pipeline again on a session
+  geshtu models                    engines, their device, and what they serve
+  geshtu model <engine> <name>     point an engine at another model
   geshtu daemon                    run the daemon in the foreground
 
 Options:
@@ -106,6 +108,27 @@ def main(argv: list[str] | None = None) -> int:
             print("  %-20s %-3d chapters  %s"
                   % (s["id"], s["chapters"], s["title"]))
         return 0
+
+    if cmd == "models":
+        r = call({"cmd": "models"})
+        for name, row in r.get("engines", {}).items():
+            print("  %-7s %-4s %s" % (name, row["device"], row["endpoint"]))
+            if row.get("error"):
+                print("      unreachable: %s" % row["error"])
+                continue
+            for m in row.get("available", []):
+                mark = " <-" if m["name"] == row["current"] else ""
+                note = "" if m["state"] == "AVAILABLE" else "  (%s)" % m["state"]
+                print("      %-32s%s%s" % (m["name"], note, mark))
+        return 0
+
+    if cmd == "model":
+        if len(rest) < 2:
+            print("usage: geshtu model <engine> <name>   (see `geshtu models`)")
+            return 1
+        r = call({"cmd": "set-model", "engine": rest[0], "model": rest[1]})
+        print(r.get("error") or ("%s -> %s" % (r["engine"], r["model"])))
+        return 0 if r.get("ok") else 1
 
     if cmd == "reprocess":
         if not rest:
