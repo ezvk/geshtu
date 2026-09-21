@@ -23,7 +23,10 @@ PROMPTS = {
                   "Never invent a decision that was not stated.",
         "chapter": ("Transcript of one part of a meeting:\n\n%s\n\n"
                     "%s"
-                    "Write:\nTITLE: a short title, under eight words\n"
+                    "Write:\nTITLE: a short title, under eight words, naming "
+                    "what is SPECIFIC to this passage. Do not restate the "
+                    "overall subject of the meeting, and do not reuse a title "
+                    "listed above.\n"
                     "then a paragraph of what was said, then, only if they "
                     "were actually stated, the lines DECISIONS: and ACTIONS: "
                     "with one bullet each."),
@@ -37,7 +40,10 @@ PROMPTS = {
                   "N'invente jamais une décision qui n'a pas été énoncée.",
         "chapter": ("Transcription d'une partie de réunion :\n\n%s\n\n"
                     "%s"
-                    "Écris :\nTITRE : un titre court, moins de huit mots\n"
+                    "Écris :\nTITRE : un titre court, moins de huit mots, qui "
+                    "nomme ce qui est PROPRE à ce passage. Ne redis pas le "
+                    "sujet général de la réunion, et ne reprends aucun titre "
+                    "déjà listé ci-dessus.\n"
                     "puis un paragraphe de ce qui a été dit, puis, seulement "
                     "si elles ont réellement été énoncées, les lignes "
                     "DÉCISIONS : et ACTIONS : avec une puce chacune."),
@@ -62,7 +68,7 @@ class Summarise:
         engine = cfg.engine("llm")
         words = PROMPTS.get(session.language, PROMPTS["en"])
         digest = ""
-        done = []
+        done, titres = [], []
 
         for i, chapter in enumerate(session.chapters, 1):
             # ⚠️ LES LOCUTEURS ENTRENT DANS L INVITE quand on les connait :
@@ -78,8 +84,24 @@ class Summarise:
             if len(text.split()) < MIN_WORDS:
                 report("  chapter %d skipped: %d words" % (i, len(text.split())))
                 continue
-            context = ("What came before, for reference only:\n%s\n\n" % digest
-                       if digest else "")
+            # ⚠️ LES TITRES DEJA ATTRIBUES ENTRENT DANS L INVITE, et c est
+            # ce qui manquait. Mesure du 2026-09-21 sur une conference de
+            # 2 h 35 : douze chapitres, dont NEUF commencaient par
+            # « Speculative ». Les frontieres etaient pourtant justes -- le
+            # modele titrait chaque chapitre ISOLEMENT, sans savoir comment
+            # s appelaient les autres, donc il redecrivait le sujet general
+            # au lieu de nommer ce qui distingue ce passage.
+            #
+            # Le resume cumulatif servait deja de contexte au corps ; il ne
+            # servait pas au titrage. Un titre ne peut etre distinctif que si
+            # l on sait de quoi le distinguer.
+            avant = []
+            if titres:
+                avant.append("Titles already used, do not repeat them:\n- "
+                             + "\n- ".join(titres))
+            if digest:
+                avant.append("What came before, for reference only:\n" + digest)
+            context = ("\n\n".join(avant) + "\n\n") if avant else ""
             try:
                 answer, coupe = _demande(engine, words["chapter"] % (text, context),
                                          words["system"])
@@ -93,6 +115,8 @@ class Summarise:
             if coupe:
                 chapter.body += "\n\n*(réponse tronquée par le modèle)*"
             done.append(chapter)
+            if chapter.title:
+                titres.append(chapter.title)
             digest = (digest + " " + chapter.title)[-400:]
             report("  chapter %d/%d: %s%s"
                    % (i, len(session.chapters), chapter.title,
