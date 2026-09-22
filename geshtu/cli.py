@@ -20,10 +20,18 @@ USAGE = """geshtu — self-hosted meeting intelligence
   geshtu model <engine> <name>     point an engine at another model
   geshtu models add <dir|hf:id>    serve a model dropped in the repository
   geshtu models remove <name>      stop serving it
+  geshtu dictee                     press once to start, again to type
+  geshtu commande                   press once to start, again to execute
+  geshtu bilan                      score history for the command table
   geshtu daemon                    run the daemon in the foreground
 
 Options:
   --lang <fr|en>                   language of the summary (default: en)
+
+`dictee` and `commande` are toggles, meant for a keyboard shortcut: the first
+invocation starts listening, the second stops, transcribes and acts. Whisper
+always detects the language -- there is no override, on purpose (see
+geshtu/engines.py).
 
 An application target only exists while it is playing. Start the playback
 first, then list the targets.
@@ -47,6 +55,31 @@ def call(msg: dict) -> dict:
                 break
             data += chunk
     return json.loads(data or b"{}")
+
+
+def _bascule(nom: str, cmd: str) -> int:
+    """Shared body of `geshtu dictee`/`geshtu commande`: guard against a
+    mango key-repeat storm BEFORE the daemon is even contacted, then a single
+    synchronous request that the daemon itself resolves start-vs-stop on."""
+    from geshtu import keyguard
+    if keyguard.repete(nom):
+        return 0
+    r = call({"cmd": cmd})
+    if not r.get("ok"):
+        print(r.get("error", "failed"))
+        return 1
+    if r.get("started"):
+        print("%s : j'écoute -- rappuie pour terminer" % nom)
+        return 0
+    if not r.get("text"):
+        print("rien entendu")
+        return 0
+    print(r["text"])
+    if "typed" in r:
+        print("tapé" if r["typed"] else "échec de frappe -- texte au presse-papier")
+    elif "matched" in r:
+        print(("▶ %s" % r["id"]) if r.get("matched") else "pas compris")
+    return 0
 
 
 def hms(seconds: float) -> str:
@@ -180,6 +213,17 @@ def main(argv: list[str] | None = None) -> int:
         r = call({"cmd": "set-model", "engine": rest[0], "model": rest[1]})
         print(r.get("error") or ("%s -> %s" % (r["engine"], r["model"])))
         return 0 if r.get("ok") else 1
+
+    if cmd == "dictee":
+        return _bascule("dictee", "dictee")
+
+    if cmd == "commande":
+        return _bascule("commande", "commande")
+
+    if cmd == "bilan":
+        from geshtu import commandes
+        commandes.bilan()
+        return 0
 
     if cmd == "reprocess":
         if not rest:

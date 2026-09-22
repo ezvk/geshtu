@@ -69,6 +69,18 @@ device = "GPU"
 # threshold = 0.9
 # threads = 4           # sherpa only
 
+# Voice command matching. The table itself (formulations, actions) lives
+# in a JSON file, not here -- see geshtu/commandes.py's own precedence:
+# ~/.config/geshtu/commandes.json first, then /etc/geshtu/commandes.json.
+# [dictation]
+#
+# ⚠️ NO `language` KEY HERE. engines.transcribe() never sends one, on
+# purpose (see its own docstring): forcing the wrong language produces
+# fluent nonsense with total confidence, and a short dictation clip is
+# exactly where that risk is highest, not a reason to override the rule.
+#
+# threshold = 0.75     # overrides the table's own "seuil" if set
+
 [pipeline]
 # ⚠️ `diarise` AVANT `transcribe`, ET CE N EST PAS INDIFFERENT. Les tranches
 # de transcription sont coupees sur les SILENCES, les tours de parole sur les

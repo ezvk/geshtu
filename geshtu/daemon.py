@@ -24,10 +24,12 @@ import os
 import pathlib
 import queue
 import socketserver
+import subprocess
 import threading
 import time
 import traceback
 
+from geshtu import commandes
 from geshtu import config
 from geshtu import engines
 from geshtu import models
@@ -47,6 +49,15 @@ class State:
         self.cfg = cfg
         self.lock = threading.RLock()
         self.session: models.Session | None = None
+        # ⚠️ SEPARATE SLOTS FROM `self.session`, ON PURPOSE. A meeting
+        # recording and a quick dictation both want the microphone, and
+        # PipeWire allows several simultaneous captures of the same node --
+        # there is nothing to arbitrate. MacParakeet's own architecture
+        # description names this directly: "a reserved dictation slot and a
+        # shared meeting/file slot". Dictating over a meeting must not be
+        # refused, and must not disturb it.
+        self.dictee_session: models.Session | None = None
+        self.commande_session: models.Session | None = None
         self.source_name = "pipewire"
         self.busy = ""                       # non-empty while a stage runs
         self.log: list[str] = []
@@ -130,6 +141,124 @@ class State:
         if src is None:
             raise RuntimeError("source %r is not installed" % self.source_name)
         return src
+
+    # -- dictation and voice command -------------------------------------
+    #
+    # ⚠️ NEITHER A Stage NOR A Sink. See geshtu/plugins.py and
+    # geshtu/commandes.py's own docstring: a Stage only runs inside the full
+    # `cfg.stages` list, a Sink only after it. A 3-8 second clip needs exactly
+    # one thing done to it -- transcribe, then act -- and running
+    # diarise/chapter/summarise on it would be wasted GPU calls for output
+    # nobody asked for. These two methods sit beside `pipeline.process`,
+    # never inside it.
+    #
+    # ⚠️ THE TOGGLE IS RESOLVED HERE, SERVER-SIDE, per geshtu's own rule that
+    # the daemon holds the state and clients stay thin. `voix.py`'s toggle
+    # lived in a client-side pidfile because voix HAD no daemon; geshtu does,
+    # and the CLI talks to it synchronously on every invocation (`cli.call()`
+    # is one request, one response, never cached) -- so a daemon-side toggle
+    # is never stale, unlike `tray.py`'s own 3-second status poll, which is
+    # far too slow for a press-speak-press cycle of a few seconds.
+
+    def _capture_courte(self, nom: str) -> "models.Session":
+        base = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp")
+        root = base / ("geshtu-%s" % nom)
+        root.mkdir(parents=True, exist_ok=True)
+        session = models.Session(id=nom, root=root)
+        target = plugins.Target("default:mic", "microphone", "mic")
+        session.tracks.append(self.source().start(session, target, 0))
+        return session
+
+    def _transcris_court(self, session: "models.Session") -> str:
+        """A single Whisper call, no slicing -- `Transcribe`'s silence-based
+        slicing exists for long recordings; a dictation clip fits in one
+        request. `pipeline.process`/`Transcribe().run()` are both skipped."""
+        from geshtu import audio
+        wav = session.tracks[0].segments[-1] if session.tracks[0].segments else None
+        if wav is None or not wav.exists():
+            return ""
+        # ⚠️ 350, NOT audio.py's DEFAULT OF 120. Both are the same raw
+        # signed-16-bit RMS measure with the same `data`-chunk fix; only the
+        # calibration differs. 350 is `voix.py`'s own figure, measured
+        # against a real Whisper hallucination on true silence ("Thank you.")
+        # -- exactly the failure mode a short clip is prone to, and the
+        # calibration this threshold exists to guard against.
+        if audio.is_silent(wav, rms_threshold=350.0):
+            return ""
+        return engines.transcribe(self.cfg.engine("asr"), wav)
+
+    def dictee(self) -> dict:
+        with self.lock:
+            if self.dictee_session is None:
+                self.dictee_session = self._capture_courte("dictee")
+                self.report("dictée : j'écoute")
+                return {"ok": True, "started": True}
+            session, self.dictee_session = self.dictee_session, None
+        self.source_for(session).stop(session)
+        texte = self._transcris_court(session)
+        if not texte:
+            self.report("dictée : rien entendu")
+            commandes.dire("Rien entendu")
+            return {"ok": True, "started": False, "text": ""}
+        commandes.presse_papier(texte)
+        ok = subprocess.run(["wtype", texte]).returncode == 0
+        if ok:
+            commandes.dire("Dicté", texte[:70])
+            self.report("dictée : tapé (%d mots)" % len(texte.split()))
+        else:
+            commandes.dire("Frappe échouée", "texte au presse-papier")
+            self.report("dictée : échec de frappe (wtype), texte au presse-papier")
+        return {"ok": True, "started": False, "text": texte, "typed": ok}
+
+    def commande(self) -> dict:
+        with self.lock:
+            if self.commande_session is None:
+                self.commande_session = self._capture_courte("commande")
+                self.report("commande : j'écoute")
+                return {"ok": True, "started": True}
+            session, self.commande_session = self.commande_session, None
+        self.source_for(session).stop(session)
+        texte = self._transcris_court(session)
+        if not texte:
+            self.report("commande : rien entendu")
+            commandes.dire("Rien entendu")
+            return {"ok": True, "started": False, "text": ""}
+        commandes.presse_papier(texte)
+
+        table, chemin = commandes.charge_table()
+        if table is None:
+            self.report("commande : aucune table de commandes "
+                        "(ni ~/.config/geshtu/commandes.json ni /etc/geshtu/commandes.json)")
+            commandes.dire("Pas de table de commandes")
+            return {"ok": True, "started": False, "text": texte, "matched": False}
+
+        seuil = self.cfg.raw.get("dictation", {}).get("threshold")
+        r = commandes.correspond(texte, table, chemin, self.cfg.engine("embed"), seuil)
+        if not r["retenu"]:
+            self.report("commande : REJET %.3f « %s » (plus proche : %s)"
+                        % (r["score"], texte[:60], r["id"]))
+            commandes.dire("Pas compris", texte[:70])
+            return {"ok": True, "started": False, "text": texte, "matched": False}
+
+        entree = next(c for c in table["commandes"] if c["id"] == r["id"])
+        action = entree["action"]
+        if "{n}" in action:
+            n = commandes.nombre(texte, table)
+            if n is None:
+                self.report("commande : numéro manquant pour %s" % r["id"])
+                commandes.dire("Numéro manquant")
+                return {"ok": True, "started": False, "text": texte, "matched": False}
+            action = action.replace("{n}", n)
+
+        commandes.dire("▶ %s" % r["id"], "%s (%.2f)" % (texte[:45], r["score"]))
+        ok, detail = commandes.execute(action)
+        if ok:
+            self.report("commande : ▶ %s" % r["id"])
+        else:
+            self.report("commande : « %s » a échoué : %s" % (action, detail))
+            commandes.dire("Action en échec", detail or "voir le journal")
+        return {"ok": True, "started": False, "text": texte, "matched": True,
+                "id": r["id"], "executed": ok}
 
     def source_for(self, session):
         """A session records from one source; a file session has nothing to
@@ -235,6 +364,10 @@ class State:
                 "tracks": [{"kind": t.kind, "source": t.source,
                             "level_db": t.level_db} for t in (s.tracks if s else [])],
                 "processing": self.busy,
+                # ⚠️ MINIMAL GUI PIECES, NOT A REDESIGN. tray.py's existing
+                # poll picks these up for free; no new window, no new icon.
+                "dictating": self.dictee_session is not None,
+                "commanding": self.commande_session is not None,
                 "log": self.log[-12:],
             }
 
@@ -288,6 +421,10 @@ class Handler(socketserver.StreamRequestHandler):
             return st.start(msg.get("targets") or [], msg.get("language", "en"))
         if cmd == "stop":
             return st.stop()
+        if cmd == "dictee":
+            return st.dictee()
+        if cmd == "commande":
+            return st.commande()
         if cmd == "sessions":
             return {"ok": True, "sessions": st.sessions()}
         if cmd == "reprocess":

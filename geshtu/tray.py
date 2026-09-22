@@ -126,6 +126,13 @@ class Item:
 
     def __init__(self):
         self.recording = False
+        # ⚠️ MINIMAL GUI PIECES, NOT A REDESIGN. `listening` is a superset of
+        # `recording` -- true during a meeting recording OR a dictation OR a
+        # voice command -- and drives the ICON (LIVE vs IDLE). `recording`
+        # stays specific because only a meeting has a `duration` to show; the
+        # existing LIVE icon and NeedsAttention status are reused as-is, no
+        # new asset drawn.
+        self.listening = False
         self.busy = False
         self.summary = "idle"
         self.status = "Active"
@@ -165,7 +172,7 @@ class Item:
         if prop == "Status":
             return GLib.Variant("s", self.status)
         if prop == "IconName":
-            return GLib.Variant("s", LIVE if self.recording else IDLE)
+            return GLib.Variant("s", LIVE if self.listening else IDLE)
         if prop == "AttentionIconName":
             return GLib.Variant("s", LIVE)
         if prop in ("OverlayIconName", "IconThemePath"):
@@ -218,11 +225,24 @@ class Item:
         return True
 
     def apply(self, r) -> bool:
-        was_rec, was_status = self.recording, self.status
+        was_listening, was_status = self.listening, self.status
         self.recording = bool(r.get("recording"))
         self.busy = bool(r.get("processing"))
+        # ⚠️ MINIMAL GUI PIECES, NOT A REDESIGN: no new icon asset, no new
+        # window. `dictating`/`commanding` share the exact LIVE-icon /
+        # NeedsAttention machinery already built for meeting recording --
+        # both already mean "something is capturing audio right now".
+        dictating = bool(r.get("dictating"))
+        commanding = bool(r.get("commanding"))
+        self.listening = self.recording or dictating or commanding
         if self.recording:
             self.summary = "recording — %s" % hms(r.get("duration", 0))
+            self.status = "NeedsAttention"
+        elif dictating:
+            self.summary = "dictée en cours…"
+            self.status = "NeedsAttention"
+        elif commanding:
+            self.summary = "commande…"
             self.status = "NeedsAttention"
         elif self.busy:
             self.summary = "processing %s" % r["processing"]
@@ -230,7 +250,7 @@ class Item:
         else:
             self.summary = "idle"
             self.status = "Active"
-        if self.recording != was_rec:
+        if self.listening != was_listening:
             self.emit("NewIcon")
         if self.status != was_status:
             self.emit("NewStatus", GLib.Variant("(s)", (self.status,)))
