@@ -16,7 +16,7 @@ function `keyrepeat()`:
 Since a toggle inverts state on every call, holding the key flips it
 start/stop/start/stop as fast as the repeat rate allows.
 
-⚠️ TWO WRONG VERSIONS BEFORE THIS ONE, both load-bearing lessons:
+⚠️ THREE WRONG VERSIONS BEFORE THIS ONE, all load-bearing lessons:
 
   v1 -- a flat one-second threshold, refreshed only on ACCEPTED calls.
   Holding the key past one second still flipped it, just at 1 Hz instead of
@@ -30,6 +30,22 @@ start/stop/start/stop as fast as the repeat rate allows.
   recording after six tenths of a second of nothing. Fix: the threshold must
   cover `repeat_delay`, not the interval.
 
+  v3 -- read-then-write with no locking. Deployed on utu, 2026-09-22: a real
+  `Super+Shift+D` press produced "j'écoute" then "rien entendu" 0.8 ms apart
+  in the daemon's own log -- two `geshtu dictee` processes, launched close
+  enough together that BOTH read the jeton file before EITHER had written
+  it, so both computed `recent = False` and both reached the daemon. A
+  classic TOCTOU race: v1 and v2 fixed the THRESHOLD, but never protected
+  the read-decide-write sequence itself from a second process running the
+  same three steps concurrently. Confirmed NOT mango's `reload_config`
+  (source read at the locked flake rev: it fully clears `key_bindings`
+  before reparsing, does not append) and NOT a duplicate `bind=` line
+  (checked both the repo and the live `/etc/mango/config.conf`: one line
+  each for dictee and commande). Fix: hold an flock across read AND write,
+  so a second process blocks until the first has committed its state, then
+  reads the value the first one just wrote -- not the stale one from before
+  either process ran.
+
 The right shape:
 
     threshold = max(repeat_delay * 1.25, 2 / repeat_rate, 150 ms), capped at 1.5 s
@@ -41,6 +57,7 @@ zero stray flips, one log line per burst.
 """
 from __future__ import annotations
 
+import fcntl
 import os
 import pathlib
 import subprocess
@@ -69,18 +86,32 @@ def repete(nom: str) -> bool:
     jeton = base / ("geshtu-keyguard-" + nom)
     maintenant = time.time()
     dernier, etat_prec = 0.0, "a"
-    try:
-        morceaux = jeton.read_text().split()
-        dernier = float(morceaux[0])
-        etat_prec = morceaux[1] if len(morceaux) > 1 else "a"
-    except (OSError, ValueError, IndexError):
-        pass
 
-    recent = (maintenant - dernier) < seuil
+    # ⚠️ THE WHOLE READ-DECIDE-WRITE SEQUENCE RUNS UNDER ONE flock, not just
+    # the write. Two `geshtu dictee` processes launched a few ms apart is
+    # exactly the case this guard exists for -- if the second one could read
+    # before the first writes, it would decide "not recent" from stale data
+    # every time, no matter how tight the window. The lock makes the second
+    # process wait for the first to finish deciding, then read what the
+    # first one just committed.
+    fd = os.open(jeton, os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        jeton.write_text("%s %s" % (maintenant, "i" if recent else "a"))
-    except OSError:
-        pass
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            morceaux = os.read(fd, 256).decode().split()
+            dernier = float(morceaux[0])
+            etat_prec = morceaux[1] if len(morceaux) > 1 else "a"
+        except (ValueError, IndexError, UnicodeDecodeError):
+            pass
+
+        recent = (maintenant - dernier) < seuil
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        os.write(fd, ("%s %s" % (maintenant, "i" if recent else "a")).encode())
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
     # ⚠️ ONE LOG LINE PER BURST, not one per repeat. At 25 Hz that would be 25
     # lines/second -- exactly the tool meant for diagnosing this. The `a`/`i`
