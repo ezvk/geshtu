@@ -295,6 +295,14 @@ class Window(Gtk.ApplicationWindow):
 
 
 def main() -> int:
+    # ⚠️ FORCED, NOT JUST PREFERRED. `gtk-application-prefer-dark-theme` asks
+    # the active theme for its dark variant -- it does not depend on a
+    # desktop-wide dark-mode setting existing at all, so this is the one
+    # switch that reliably gives geshtu a dark window regardless of what
+    # utu's GTK theme is otherwise set to.
+    settings = Gtk.Settings.get_default()
+    if settings is not None:
+        settings.set_property("gtk-application-prefer-dark-theme", True)
     app = Gtk.Application(application_id="org.geshtu.Window")
     app.connect("activate", lambda a: Window(a).present())
     return app.run(None)
