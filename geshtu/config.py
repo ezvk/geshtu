@@ -27,7 +27,7 @@ device = "NPU"
 
 [engines.llm]
 endpoint = "http://localhost:8092/v3/chat/completions"
-model = "qwen3-8b"
+model = "qwen3-coder-30b"
 # ⚠️ `device` IS A CLAIM, NOT A CONTROL. It does not move anything: which
 # accelerator serves a model is decided when the model server starts. It
 # exists so the pipeline can reason about this endpoint's limits -- and it
