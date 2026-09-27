@@ -64,6 +64,7 @@ class State:
         self.jobs: queue.Queue = queue.Queue()
         self.sources = {n: c() for n, c in plugins.sources().items()}
         self.models = self._load_models()
+        self.prefs = self._load_prefs()
         threading.Thread(target=self._worker, daemon=True).start()
 
     # -- model choice ---------------------------------------------------
@@ -79,6 +80,40 @@ class State:
             return json.loads(self._models_path().read_text())
         except (OSError, ValueError):
             return {}
+
+    # -- summary language -------------------------------------------------
+    #
+    # ⚠️ ONE PLACE DECIDES, AND IT PERSISTS. The language used to come from four
+    # places that never agreed -- the window's drop-down (reset to english at
+    # every launch), the CLI (en), the tray icon (fr, hard-coded) and the daemon
+    # (en) -- so what a session got depended on which button started it. ezvk,
+    # 2026-09-27: « fr default mais surtout que le défaut sticke ».
+    # Precedence: an explicit per-session language, else the remembered choice,
+    # else [summary] language from the config.
+
+    def _prefs_path(self) -> pathlib.Path:
+        return self.cfg.sessions / "preferences.json"
+
+    def _load_prefs(self) -> dict:
+        try:
+            return json.loads(self._prefs_path().read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def language(self) -> str:
+        return (self.prefs.get("language")
+                or self.cfg.raw.get("summary", {}).get("language") or "fr")
+
+    def set_language(self, language: str) -> dict:
+        from geshtu.builtin.summary import PROMPTS
+        if language not in PROMPTS:
+            return {"ok": False, "error": "no summary prompts for %r (have: %s)"
+                    % (language, ", ".join(sorted(PROMPTS)))}
+        self.prefs["language"] = language
+        self._prefs_path().parent.mkdir(parents=True, exist_ok=True)
+        self._prefs_path().write_text(json.dumps(self.prefs, indent=2))
+        self.report("summary language -> %s" % language)
+        return {"ok": True, "language": language}
 
     def active(self) -> config.Config:
         """The config as it stands, with any chosen models applied."""
@@ -418,7 +453,12 @@ class Handler(socketserver.StreamRequestHandler):
         if cmd == "targets":
             return {"ok": True, "targets": st.targets()}
         if cmd == "start":
-            return st.start(msg.get("targets") or [], msg.get("language", "en"))
+            return st.start(msg.get("targets") or [],
+                            msg.get("language") or st.language())
+        if cmd == "get-language":
+            return {"ok": True, "language": st.language()}
+        if cmd == "set-language":
+            return st.set_language(msg.get("language", ""))
         if cmd == "stop":
             return st.stop()
         if cmd == "dictee":

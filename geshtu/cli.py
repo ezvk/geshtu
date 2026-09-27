@@ -26,7 +26,8 @@ USAGE = """geshtu — self-hosted meeting intelligence
   geshtu daemon                    run the daemon in the foreground
 
 Options:
-  --lang <fr|en>                   language of the summary (default: en)
+  --lang <fr|en>                   summary language for THIS session only
+  geshtu lang [fr|en]              show or set the remembered summary language
 
 `dictee` and `commande` are toggles, meant for a keyboard shortcut: the first
 invocation starts listening, the second stops, transcribes and acts. Whisper
@@ -120,11 +121,19 @@ def _models_add(args: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
-    language = "en"
+    # None = let the daemon use the remembered choice (see State.language()).
+    language = None
     if "--lang" in args:
         i = args.index("--lang")
-        language = args[i + 1] if len(args) > i + 1 else "en"
+        language = args[i + 1] if len(args) > i + 1 else None
         del args[i:i + 2]
+    if args[:1] == ["lang"]:
+        if len(args) > 1:
+            r = call({"cmd": "set-language", "language": args[1]})
+        else:
+            r = call({"cmd": "get-language"})
+        print(r.get("error") or r["language"])
+        return 0 if r.get("ok") else 1
     if not args:
         print(USAGE)
         return 1

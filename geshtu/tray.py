@@ -213,8 +213,8 @@ class Item:
             # stream cannot be chosen from an icon, and guessing one would
             # record the wrong thing silently. Without a prior choice the
             # daemon refuses and says so; the window is where one chooses.
-            call({"cmd": "start", "targets": ["default:output"],
-                  "language": "fr"})
+            # No language here: the daemon's remembered choice applies.
+            call({"cmd": "start", "targets": ["default:output"]})
         self.tick()
 
     # ------------------------------------------------------------- state

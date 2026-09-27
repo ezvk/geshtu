@@ -65,6 +65,11 @@ class Window(Gtk.ApplicationWindow):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         row.append(Gtk.Label(label="Summary in", xalign=0))
         self.lang = Gtk.DropDown(model=Gtk.StringList.new(["english", "français"]))
+        # ⚠️ READ FROM THE DAEMON, WRITTEN BACK ON CHANGE: the drop-down used to
+        # come up on "english" at every launch, whatever was chosen last time.
+        courante = call({"cmd": "get-language"}).get("language", "fr")
+        self.lang.set_selected(0 if courante == "en" else 1)
+        self.lang.connect("notify::selected", self.set_language)
         row.append(self.lang)
         box.append(row)
 
@@ -217,6 +222,10 @@ class Window(Gtk.ApplicationWindow):
                   "language": self.lang_code()})
         self.log(r.get("error") or ("recording %s" % r.get("session")))
         self.tick()
+
+    def set_language(self, _drop, _param) -> None:
+        r = call({"cmd": "set-language", "language": self.lang_code()})
+        self.log(r.get("error") or ("summary in %s from now on" % r["language"]))
 
     def lang_code(self) -> str:
         return "en" if self.lang.get_selected() == 0 else "fr"

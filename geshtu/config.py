@@ -81,6 +81,11 @@ device = "GPU"
 #
 # threshold = 0.75     # overrides the table's own "seuil" if set
 
+[summary]
+# The summary language when nothing else was chosen. The choice made in the
+# window (or `geshtu lang`) is remembered by the daemon and wins over this.
+language = "fr"
+
 [pipeline]
 # ⚠️ `diarise` AVANT `transcribe`, ET CE N EST PAS INDIFFERENT. Les tranches
 # de transcription sont coupees sur les SILENCES, les tours de parole sur les
