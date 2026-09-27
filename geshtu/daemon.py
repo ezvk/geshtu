@@ -32,6 +32,7 @@ import traceback
 from geshtu import commandes
 from geshtu import config
 from geshtu import engines
+from geshtu import lecture
 from geshtu import models
 from geshtu import pipeline
 from geshtu import plugins
@@ -65,6 +66,7 @@ class State:
         self.sources = {n: c() for n, c in plugins.sources().items()}
         self.models = self._load_models()
         self.prefs = self._load_prefs()
+        self.lecteur = lecture.Lecteur(self)
         threading.Thread(target=self._worker, daemon=True).start()
 
     # -- model choice ---------------------------------------------------
@@ -404,6 +406,7 @@ class State:
                 "dictating": self.dictee_session is not None,
                 "commanding": self.commande_session is not None,
                 "log": self.log[-12:],
+                "lecture": self.lecteur.status(),
             }
 
     def sessions(self) -> list[dict]:
@@ -455,6 +458,10 @@ class Handler(socketserver.StreamRequestHandler):
         if cmd == "start":
             return st.start(msg.get("targets") or [],
                             msg.get("language") or st.language())
+        if cmd == "lire":
+            return st.lecteur.bascule()
+        if cmd == "lire-stop":
+            return st.lecteur.stop()
         if cmd == "get-language":
             return {"ok": True, "language": st.language()}
         if cmd == "set-language":

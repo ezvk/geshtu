@@ -96,6 +96,18 @@ class Window(Gtk.ApplicationWindow):
         actions.append(self.openfile)
         box.append(actions)
 
+        # ---- read the latest summary aloud (geshtu/lecture.py) ----------
+        lire = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.lire = Gtk.Button(label="▶ Lire le dernier résumé", hexpand=True)
+        self.lire.set_tooltip_text("Kokoro, sur le NPU -- lecture / pause / reprise")
+        self.lire.connect("clicked", self.lire_bascule)
+        lire.append(self.lire)
+        self.lire_stop = Gtk.Button(icon_name="media-playback-stop-symbolic")
+        self.lire_stop.set_tooltip_text("Arrêter la lecture")
+        self.lire_stop.connect("clicked", self.lire_arret)
+        lire.append(self.lire_stop)
+        box.append(lire)
+
         # ---- engines -------------------------------------------------
         #
         # Folded away because it is not part of recording, but present
@@ -237,6 +249,16 @@ class Window(Gtk.ApplicationWindow):
         r = call({"cmd": "set-language", "language": self.lang_code()})
         self.log(r.get("error") or ("summary in %s from now on" % r["language"]))
 
+    def lire_bascule(self, _button) -> None:
+        r = call({"cmd": "lire"})
+        if not r.get("ok"):
+            self.log(r.get("error", "lecture impossible"))
+        self.tick()
+
+    def lire_arret(self, _button) -> None:
+        call({"cmd": "lire-stop"})
+        self.tick()
+
     def lang_code(self) -> str:
         return "en" if self.lang.get_selected() == 0 else "fr"
 
@@ -305,6 +327,15 @@ class Window(Gtk.ApplicationWindow):
         self.button.set_sensitive(not self.busy)
         self.openfile.set_sensitive(not self.busy and not self.recording)
         self.list.set_sensitive(not self.recording)
+        lec = r.get("lecture") or {}
+        etat = lec.get("etat", "idle")
+        self.lire.set_label({
+            "preparing": "… préparation de la lecture",
+            "playing": "⏸ Pause",
+            "paused": "▶ Reprendre",
+        }.get(etat, "▶ Lire le dernier résumé"))
+        self.lire.set_sensitive(etat != "preparing")
+        self.lire_stop.set_sensitive(etat in ("playing", "paused", "preparing"))
         buf = self.view.get_buffer()
         known = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
         for line in r.get("log", []):

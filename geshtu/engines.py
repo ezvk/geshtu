@@ -126,3 +126,18 @@ def embed(engine, texts: list[str]) -> list[list[float]]:
     with urllib.request.urlopen(req, timeout=engine.timeout) as resp:
         out = json.loads(resp.read())
     return [d["embedding"] for d in out.get("data", [])]
+
+
+def speak(engine, text: str, voice: str, language: str) -> bytes:
+    """Text in, WAV bytes out (OVMS /v3/audio/speech, OpenAI-shaped).
+
+    ⚠️ `language` IS NOT OPTIONAL IN PRACTICE: OVMS defaults to en-us, and
+    French phonemised as English is broken speech, not an accent.
+    """
+    payload = {"model": engine.model, "voice": voice, "language": language,
+               "input": text}
+    req = urllib.request.Request(
+        engine.endpoint, data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=engine.timeout) as resp:
+        return resp.read()

@@ -55,6 +55,18 @@ endpoint = "http://localhost:8096/v3/embeddings"
 model = "embeddings"
 device = "GPU"
 
+[engines.tts]
+# Read-aloud of the latest summary (geshtu/lecture.py). Kokoro on the NPU.
+# ⚠️ The language is sent per request (fr-fr / en-us, from the summary's own
+# language): without it Kokoro phonemises French with English rules.
+endpoint = "http://localhost:8098/v3/audio/speech"
+model = "kokoro"
+device = "NPU"
+
+# [lecture]
+# voix_fr = "ff_siwis"    # the model's only French voice
+# voix_en = "af_heart"
+
 # Who spoke when. Absent models simply skip the stage.
 # [diarisation]
 # engine = "openvino"   # or "sherpa", the CPU tool kept as a reference
