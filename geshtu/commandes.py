@@ -62,8 +62,14 @@ def reference(table: dict, table_path: pathlib.Path, embed_engine) -> dict:
     ⚠️ THE CACHE KEY IS A HASH OF THE TABLE FILE: edit a formulation and the
     cache invalidates itself. Without this, a corrected table would keep
     being compared against the old vectors, silently.
+
+    ⚠️ AND OF THE EMBEDDER (endpoint + model). Two embedders can share a
+    dimension -- Qwen3-Embedding-0.6B and harrier-oss-v1-0.6b are both 1024 --
+    so vectors from the old model compare against the new one without any
+    error, and every score is simply wrong. Changing the model must recompute.
     """
     brut = table_path.read_bytes()
+    brut += ("\0%s\0%s" % (embed_engine.endpoint, embed_engine.model)).encode()
     cle = hashlib.sha256(brut).hexdigest()[:16]
     f = CACHE / ("%s.json" % cle)
     if f.is_file():

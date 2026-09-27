@@ -24,7 +24,19 @@ def available(engine) -> list[dict]:
         with urllib.request.urlopen(base + "/v1/config", timeout=10) as resp:
             raw = json.loads(resp.read())
     except Exception as exc:                            # noqa: BLE001
-        raise RuntimeError("%s unreachable: %s" % (base, exc))
+        # ⚠️ /v1/config IS OVMS ONLY. Any other OpenAI-compatible server
+        # (LiteLLM, llama-server, vLLM) lists on /v1/models instead, and has no
+        # per-model state to report: "listed" says exactly that -- the name is
+        # routable, nothing is claimed about whether it is loaded. Without this,
+        # pointing an engine at LiteLLM showed "unreachable" for a server that
+        # answers every request.
+        try:
+            with urllib.request.urlopen(base + "/v1/models", timeout=10) as resp:
+                listed = json.loads(resp.read()).get("data") or []
+        except Exception:                               # noqa: BLE001
+            raise RuntimeError("%s unreachable: %s" % (base, exc))
+        return [{"name": m["id"], "state": "listed"}
+                for m in sorted(listed, key=lambda m: m["id"])]
     out = []
     for name, info in sorted(raw.items()):
         versions = info.get("model_version_status") or []
