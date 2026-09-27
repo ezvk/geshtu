@@ -389,9 +389,11 @@ class Window(Gtk.ApplicationWindow):
         lignes = tr.get("lignes") or []
         if len(lignes) != self.vu or (lignes and not self.traduction_active and self.vu == 0):
             buf = self.sous_titres.get_buffer()
-            buf.set_text("\n\n".join(
-                "%s  %s\n→ %s   (%.1f s)" % (l["quand"], l["original"],
-                                              l["traduction"] or "—", l["delai"])
+            # ⚠️ LA TRADUCTION SEULE. ezvk : « il met les deux langues dans le
+            # transcript ». L'original ne revient que si la traduction a échoué,
+            # pour ne pas perdre la phrase.
+            buf.set_text("\n".join(
+                "%s  %s" % (l["quand"], l["traduction"] or "(%s)" % l["original"])
                 for l in lignes))
             self.sous_titres.scroll_to_mark(
                 buf.create_mark(None, buf.get_end_iter(), False), 0, False, 0, 0)
