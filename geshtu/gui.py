@@ -16,6 +16,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 
+from gi.repository import Gio   # noqa: E402
 from gi.repository import GLib  # noqa: E402
 from gi.repository import Gtk   # noqa: E402
 
@@ -45,6 +46,15 @@ class Window(Gtk.ApplicationWindow):
         refresh.set_tooltip_text("Re-read what is playing")
         refresh.connect("clicked", lambda *_: self.reload())
         head.append(refresh)
+        # ⚠️ AN EXPLICIT WAY OUT. mango draws no title bar, so the window had no
+        # close button, and geshtu is a single-instance Gtk.Application: what
+        # looked like closing it left it running, and "reopening" only raised
+        # the same instance with its old state. ezvk: « on peut pas quit ».
+        # Button + Ctrl+Q / Ctrl+W (see main()); the daemon is not affected.
+        quitter = Gtk.Button(icon_name="application-exit-symbolic")
+        quitter.set_tooltip_text("Quit the window (Ctrl+Q) -- the daemon keeps running")
+        quitter.connect("clicked", lambda *_: app.quit())
+        head.append(quitter)
         box.append(head)
 
         # ---- sources -------------------------------------------------
@@ -313,6 +323,10 @@ def main() -> int:
     if settings is not None:
         settings.set_property("gtk-application-prefer-dark-theme", True)
     app = Gtk.Application(application_id="org.geshtu.Window")
+    quit_action = Gio.SimpleAction.new("quit", None)
+    quit_action.connect("activate", lambda *_: app.quit())
+    app.add_action(quit_action)
+    app.set_accels_for_action("app.quit", ["<Control>q", "<Control>w"])
     app.connect("activate", lambda a: Window(a).present())
     return app.run(None)
 
