@@ -34,6 +34,7 @@ from geshtu import commandes
 from geshtu import config
 from geshtu import engines
 from geshtu import lecture
+from geshtu import traduction
 from geshtu import models
 from geshtu import pipeline
 from geshtu import plugins
@@ -68,6 +69,7 @@ class State:
         self.models = self._load_models()
         self.prefs = self._load_prefs()
         self.lecteur = lecture.Lecteur(self)
+        self.traducteur = traduction.Traducteur(self)
         threading.Thread(target=self._worker, daemon=True).start()
 
     # -- model choice ---------------------------------------------------
@@ -132,6 +134,20 @@ class State:
         self._prefs_path().write_text(json.dumps(self.prefs, indent=2))
         self.report("spoken language -> %s" % langue)
         return {"ok": True, "langue_entree": langue}
+
+    # -- live translation target language ----------------------------------
+    def langue_cible(self) -> str:
+        return self.prefs.get("langue_cible") or "fr"
+
+    def set_langue_cible(self, langue: str) -> dict:
+        if langue not in traduction.KOKORO:
+            return {"ok": False, "error": "no Kokoro voice for %r (have: %s)"
+                    % (langue, ", ".join(traduction.KOKORO))}
+        self.prefs["langue_cible"] = langue
+        self._prefs_path().parent.mkdir(parents=True, exist_ok=True)
+        self._prefs_path().write_text(json.dumps(self.prefs, indent=2))
+        self.report("translate into -> %s" % langue)
+        return {"ok": True, "langue_cible": langue}
 
     def active(self) -> config.Config:
         """The config as it stands, with any chosen models applied."""
@@ -335,6 +351,9 @@ class State:
             if self.session is not None:
                 return {"ok": False, "error": "already recording",
                         "session": self.session.id}
+            # One capture at a time: both use the same capture sink.
+            if self.traducteur.status()["etat"] != "idle":
+                return {"ok": False, "error": "a live translation is running -- stop it first"}
             root = self.cfg.sessions / time.strftime("%Y-%m-%d_%H-%M")
             root.mkdir(parents=True, exist_ok=True)
             session = models.Session(id=root.name, root=root, language=language,
@@ -424,6 +443,7 @@ class State:
                 "commanding": self.commande_session is not None,
                 "log": self.log[-12:],
                 "lecture": self.lecteur.status(),
+                "traduction": self.traducteur.status(),
             }
 
     def sessions(self) -> list[dict]:
@@ -484,6 +504,16 @@ class Handler(socketserver.StreamRequestHandler):
             return {"ok": True, "langue_entree": st.langue_entree()}
         if cmd == "set-entree":
             return st.set_langue_entree(msg.get("langue_entree", ""))
+        if cmd == "traduire":
+            return st.traducteur.start(msg.get("target", ""),
+                                       msg.get("entree") or st.langue_entree(),
+                                       msg.get("cible") or st.langue_cible())
+        if cmd == "traduire-stop":
+            return st.traducteur.stop()
+        if cmd == "get-cible":
+            return {"ok": True, "langue_cible": st.langue_cible()}
+        if cmd == "set-cible":
+            return st.set_langue_cible(msg.get("langue_cible", ""))
         if cmd == "lire":
             return st.lecteur.bascule()
         if cmd == "lire-stop":

@@ -33,6 +33,7 @@ class Window(Gtk.ApplicationWindow):
         self.set_default_size(620, 620)
         self.busy = False
         self.recording = False
+        self.traduction_active = False
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         for side in ("top", "bottom", "start", "end"):
@@ -65,12 +66,17 @@ class Window(Gtk.ApplicationWindow):
         # raison : on enregistre UNE source, et la question « est-ce que ma
         # voix y va aussi » n en est pas une deuxieme du meme genre. Les
         # melanger fait une liste ou deux decisions differentes se ressemblent.
+        #
+        # ⚠️ ET UN MENU DÉROULANT, PLUS UNE LISTE. ezvk, 2026-09-27 : « le
+        # sélecteur d'audio ça doit être un menu déroulant pas une liste
+        # d'entrées », « ça fait de la place pour la fenêtre de transcript ».
+        # La place gagnée va aux sous-titres de la traduction en direct.
         self.rows: list[dict] = []
-        self.list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
-        self.list.add_css_class("rich-list")
-        scroll = Gtk.ScrolledWindow(vexpand=True, child=self.list)
-        scroll.add_css_class("frame")
-        box.append(scroll)
+        src = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        src.append(Gtk.Label(label="Source", xalign=0))
+        self.sources_menu = Gtk.DropDown(model=Gtk.StringList.new(["…"]), hexpand=True)
+        src.append(self.sources_menu)
+        box.append(src)
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         # The SPOKEN language, separate from the summary's -- Whisper on OVMS
@@ -91,6 +97,15 @@ class Window(Gtk.ApplicationWindow):
         self.lang.set_selected(0 if courante == "en" else 1)
         self.lang.connect("notify::selected", self.set_language)
         row.append(self.lang)
+        row.append(Gtk.Label(label="Traduire vers", xalign=0))
+        self.cibles = ["fr", "en", "es", "it", "pt"]
+        self.cible = Gtk.DropDown(model=Gtk.StringList.new(
+            ["français", "english", "español", "italiano", "português"]))
+        c = call({"cmd": "get-cible"}).get("langue_cible", "fr")
+        if c in self.cibles:
+            self.cible.set_selected(self.cibles.index(c))
+        self.cible.connect("notify::selected", self.set_cible)
+        row.append(self.cible)
         box.append(row)
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -118,6 +133,21 @@ class Window(Gtk.ApplicationWindow):
         lire.append(self.lire_stop)
         box.append(lire)
 
+        # ---- live translation (geshtu/traduction.py) ------------------
+        self.traduire = Gtk.Button(label="🌐 Traduire en direct")
+        self.traduire.set_tooltip_text(
+            "La source choisie, de « Audio en » vers « Traduire vers » : "
+            "sous-titres ici, voix Kokoro dans le casque")
+        self.traduire.connect("clicked", self.traduire_bascule)
+        box.append(self.traduire)
+        self.sous_titres = Gtk.TextView(editable=False, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        self.sous_titres.set_left_margin(8)
+        self.sous_titres.set_right_margin(8)
+        haut = Gtk.ScrolledWindow(vexpand=True, child=self.sous_titres)
+        haut.add_css_class("frame")
+        box.append(haut)
+        self.vu = 0
+
         # ---- engines -------------------------------------------------
         #
         # Folded away because it is not part of recording, but present
@@ -135,7 +165,7 @@ class Window(Gtk.ApplicationWindow):
         box.append(low)
 
         self.reload()
-        GLib.timeout_add_seconds(3, self.tick)
+        GLib.timeout_add(1000, self.tick)
 
     # ------------------------------------------------------------- helpers
     def log(self, text: str) -> None:
@@ -147,12 +177,6 @@ class Window(Gtk.ApplicationWindow):
     def reload(self) -> None:
         keep = self.selected_key()
         r = call({"cmd": "targets"})
-        child = self.list.get_first_child()
-        while child is not None:
-            nxt = child.get_next_sibling()
-            self.list.remove(child)
-            child = nxt
-        self.rows = []
         # ⚠️ LE MICRO EST UNE LIGNE COMME LES AUTRES. Il a ete une case a
         # cocher separee ; ezvk : « checkbox also record my mic is useless as
         # your voice is reflected in main rendered/recorded stream ». Vrai
@@ -167,35 +191,25 @@ class Window(Gtk.ApplicationWindow):
         # decalage : ce n est pas qu un desagrement a l oreille, l ASR repete
         # ou bafouille sur les passages doubles. On ne peut plus cocher les
         # deux, donc le cas ne se presente plus.
-        targets = r.get("targets", [])
-        for t in targets:
+        self.rows = r.get("targets", [])
+        textes = []
+        for t in self.rows:
             if t["kind"] == "app":
-                title = t["detail"] or t["label"]
-                text = "%s — %s" % (t["label"], title)
+                textes.append(("%s — %s" % (t["label"], t["detail"] or t["label"]))[:90])
             else:
-                text = "%s — %s" % (t["label"], t["detail"])
-            label = Gtk.Label(label=text[:90], xalign=0)
-            label.set_margin_top(6)
-            label.set_margin_bottom(6)
-            label.set_margin_start(8)
-            self.list.append(label)
-            self.rows.append(t)
-        if not targets:
-            self.list.append(Gtk.Label(
-                label="nothing is playing — a stream exists only while it plays",
-                xalign=0))
-            return
+                textes.append(("%s — %s" % (t["label"], t["detail"]))[:90])
+        self.sources_menu.set_model(Gtk.StringList.new(
+            textes or ["rien ne joue — un flux n'existe que pendant qu'il joue"]))
         for i, t in enumerate(self.rows):
             if t["key"] == keep:
-                self.list.select_row(self.list.get_row_at_index(i))
+                self.sources_menu.set_selected(i)
                 return
-        self.list.select_row(self.list.get_row_at_index(0))
+        self.sources_menu.set_selected(0)
 
     def selected_key(self) -> str | None:
-        row = self.list.get_selected_row()
-        if row is None:
+        if not self.rows:
             return None
-        i = row.get_index()
+        i = self.sources_menu.get_selected()
         return self.rows[i]["key"] if 0 <= i < len(self.rows) else None
 
     # ------------------------------------------------------------- engines
@@ -265,6 +279,29 @@ class Window(Gtk.ApplicationWindow):
             return
         r = call({"cmd": "set-entree", "langue_entree": self.entrees[i]})
         self.log(r.get("error") or ("audio en %s from now on" % r["langue_entree"]))
+
+    def set_cible(self, _drop, _param) -> None:
+        i = self.cible.get_selected()
+        if not 0 <= i < len(self.cibles):
+            return
+        r = call({"cmd": "set-cible", "langue_cible": self.cibles[i]})
+        self.log(r.get("error") or ("traduction vers %s" % r["langue_cible"]))
+
+    def traduire_bascule(self, _button) -> None:
+        if self.traduction_active:
+            call({"cmd": "traduire-stop"})
+        else:
+            key = self.selected_key()
+            if key is None:
+                self.log("choisis une source")
+                return
+            r = call({"cmd": "traduire", "target": key})
+            if not r.get("ok"):
+                self.log(r.get("error", "traduction impossible"))
+            elif not r.get("voix"):
+                self.log("sortie système : sous-titres seulement (la voix se "
+                         "retraduirait elle-même en boucle)")
+        self.tick()
 
     def lire_bascule(self, _button) -> None:
         r = call({"cmd": "lire"})
@@ -343,7 +380,22 @@ class Window(Gtk.ApplicationWindow):
             self.button.add_css_class("suggested-action")
         self.button.set_sensitive(not self.busy)
         self.openfile.set_sensitive(not self.busy and not self.recording)
-        self.list.set_sensitive(not self.recording)
+        tr = r.get("traduction") or {}
+        self.traduction_active = tr.get("etat") == "running"
+        self.sources_menu.set_sensitive(not self.recording and not self.traduction_active)
+        self.traduire.set_label("⏹ Arrêter la traduction" if self.traduction_active
+                                else "🌐 Traduire en direct")
+        self.traduire.set_sensitive(not self.recording and not self.busy)
+        lignes = tr.get("lignes") or []
+        if len(lignes) != self.vu or (lignes and not self.traduction_active and self.vu == 0):
+            buf = self.sous_titres.get_buffer()
+            buf.set_text("\n\n".join(
+                "%s  %s\n→ %s   (%.1f s)" % (l["quand"], l["original"],
+                                              l["traduction"] or "—", l["delai"])
+                for l in lignes))
+            self.sous_titres.scroll_to_mark(
+                buf.create_mark(None, buf.get_end_iter(), False), 0, False, 0, 0)
+            self.vu = len(lignes)
         lec = r.get("lecture") or {}
         etat = lec.get("etat", "idle")
         self.lire.set_label({
