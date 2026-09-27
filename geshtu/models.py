@@ -75,6 +75,8 @@ class Session:
     id: str
     root: pathlib.Path
     language: str = "en"
+    # The SPOKEN language, sent to Whisper -- not the summary's (`language`).
+    langue_entree: str = ""
     started: float = dataclasses.field(default_factory=time.time)
     ended: float | None = None
     tracks: list[Track] = dataclasses.field(default_factory=list)
@@ -137,6 +139,7 @@ def as_dict(obj):
 def from_dict(cls, raw: dict, root: pathlib.Path) -> Session:
     s = cls(id=raw["id"], root=root)
     s.language = raw.get("language", "en")
+    s.langue_entree = raw.get("langue_entree", "")
     s.started = raw.get("started", 0.0)
     s.ended = raw.get("ended")
     s.title = raw.get("title", "")

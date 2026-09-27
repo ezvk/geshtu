@@ -32,7 +32,7 @@ class Transcribe:
         for i, (start, end) in enumerate(bounds):
             piece = audio.slice_out(session.mixed, work / ("%03d.wav" % i),
                                     start, end, cfg.rate)
-            text = engines.transcribe(engine, piece)
+            text = engines.transcribe(engine, piece, session.langue_entree or None)
             if not text:
                 continue
             seg = Segment(start=start, end=end, text=text)

@@ -28,6 +28,9 @@ USAGE = """geshtu — self-hosted meeting intelligence
 Options:
   --lang <fr|en>                   summary language for THIS session only
   geshtu lang [fr|en]              show or set the remembered summary language
+  --entree <xx>                    spoken language for THIS session only
+  geshtu entree [fr|en|…]          show or set the remembered SPOKEN language
+                                   (sent to Whisper: sessions, dictation, commands)
 
 `dictee` and `commande` are toggles, meant for a keyboard shortcut: the first
 invocation starts listening, the second stops, transcribes and acts. Whisper
@@ -127,6 +130,18 @@ def main(argv: list[str] | None = None) -> int:
         i = args.index("--lang")
         language = args[i + 1] if len(args) > i + 1 else None
         del args[i:i + 2]
+    entree = None
+    if "--entree" in args:
+        i = args.index("--entree")
+        entree = args[i + 1] if len(args) > i + 1 else None
+        del args[i:i + 2]
+    if args[:1] == ["entree"]:
+        if len(args) > 1:
+            r = call({"cmd": "set-entree", "langue_entree": args[1]})
+        else:
+            r = call({"cmd": "get-entree"})
+        print(r.get("error") or r["langue_entree"])
+        return 0 if r.get("ok") else 1
     if args[:1] == ["lang"]:
         if len(args) > 1:
             r = call({"cmd": "set-language", "language": args[1]})
@@ -155,7 +170,8 @@ def main(argv: list[str] | None = None) -> int:
         if not rest:
             print("usage: geshtu start <key> [<key>...]   (see `geshtu targets`)")
             return 1
-        r = call({"cmd": "start", "targets": rest, "language": language})
+        r = call({"cmd": "start", "targets": rest, "language": language,
+                  "entree": entree})
         print(r.get("error") or ("recording %s" % r.get("session")))
         return 0 if r.get("ok") else 1
 

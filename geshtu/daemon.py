@@ -23,6 +23,7 @@ import json
 import os
 import pathlib
 import queue
+import re
 import socketserver
 import subprocess
 import threading
@@ -116,6 +117,21 @@ class State:
         self._prefs_path().write_text(json.dumps(self.prefs, indent=2))
         self.report("summary language -> %s" % language)
         return {"ok": True, "language": language}
+
+    # -- spoken (input) language, separate from the summary's ---------------
+    def langue_entree(self) -> str:
+        return (self.prefs.get("langue_entree")
+                or self.cfg.raw.get("transcription", {}).get("language") or "fr")
+
+    def set_langue_entree(self, langue: str) -> dict:
+        # Whisper takes ISO 639-1 codes; anything else fails at the first slice.
+        if not re.fullmatch(r"[a-z]{2}", langue or ""):
+            return {"ok": False, "error": "a two-letter language code, e.g. fr or en"}
+        self.prefs["langue_entree"] = langue
+        self._prefs_path().parent.mkdir(parents=True, exist_ok=True)
+        self._prefs_path().write_text(json.dumps(self.prefs, indent=2))
+        self.report("spoken language -> %s" % langue)
+        return {"ok": True, "langue_entree": langue}
 
     def active(self) -> config.Config:
         """The config as it stands, with any chosen models applied."""
@@ -222,7 +238,7 @@ class State:
         # calibration this threshold exists to guard against.
         if audio.is_silent(wav, rms_threshold=350.0):
             return ""
-        return engines.transcribe(self.cfg.engine("asr"), wav)
+        return engines.transcribe(self.cfg.engine("asr"), wav, self.langue_entree())
 
     def dictee(self) -> dict:
         with self.lock:
@@ -314,14 +330,15 @@ class State:
                             "kind": t.kind, "detail": t.detail})
         return out
 
-    def start(self, keys: list[str], language: str) -> dict:
+    def start(self, keys: list[str], language: str, entree: str | None = None) -> dict:
         with self.lock:
             if self.session is not None:
                 return {"ok": False, "error": "already recording",
                         "session": self.session.id}
             root = self.cfg.sessions / time.strftime("%Y-%m-%d_%H-%M")
             root.mkdir(parents=True, exist_ok=True)
-            session = models.Session(id=root.name, root=root, language=language)
+            session = models.Session(id=root.name, root=root, language=language,
+                                     langue_entree=entree or self.langue_entree())
             # ⚠️ A KEY MAY NAME ITS OWN SOURCE, and this is the extension
             # point rather than a special case for files.
             #
@@ -425,7 +442,11 @@ class State:
         root = self.cfg.sessions / sid
         if not (root / "session.json").is_file():
             return {"ok": False, "error": "no such session"}
-        self.jobs.put(models.Session.load(root))
+        s = models.Session.load(root)
+        # A session recorded before the spoken language existed gets today's.
+        if not s.langue_entree:
+            s.langue_entree = self.langue_entree()
+        self.jobs.put(s)
         return {"ok": True, "queued": True}
 
 
@@ -457,7 +478,12 @@ class Handler(socketserver.StreamRequestHandler):
             return {"ok": True, "targets": st.targets()}
         if cmd == "start":
             return st.start(msg.get("targets") or [],
-                            msg.get("language") or st.language())
+                            msg.get("language") or st.language(),
+                            msg.get("entree"))
+        if cmd == "get-entree":
+            return {"ok": True, "langue_entree": st.langue_entree()}
+        if cmd == "set-entree":
+            return st.set_langue_entree(msg.get("langue_entree", ""))
         if cmd == "lire":
             return st.lecteur.bascule()
         if cmd == "lire-stop":

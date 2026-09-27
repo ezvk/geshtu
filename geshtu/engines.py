@@ -45,12 +45,19 @@ def available(engine) -> list[dict]:
     return out
 
 
-def transcribe(engine, path: pathlib.Path) -> str:
+def transcribe(engine, path: pathlib.Path, language: str | None = None) -> str:
     """One audio file in, text out.
 
-    ⚠️ NEVER SEND `language=`. The model detects it, and forcing the wrong one
-    produces fluent nonsense with total confidence. The summary language is a
-    separate setting; they are not the same decision.
+    ⚠️ THE LANGUAGE IS SENT. This docstring used to say "NEVER SEND
+    `language=`, the model detects it". Measured on OVMS 2026.4.0 (utu, NPU,
+    2026-09-27): it does NOT detect per request -- each request reuses the
+    LAST language. JFK came out « Et donc mes amis américains… » right after a
+    French clip, and French came out « Hello, I'm the local voice… » right
+    after JFK. `language=` empty resets nothing, `language=auto` is an error.
+    With an explicit language the text was right every time. The spoken
+    language is therefore a setting (State.langue_entree()), SEPARATE from the
+    summary language -- ezvk: « je préfère choisir séparément le langage
+    d'entrée, ça va pas seulement servir aux réunions ».
 
     ⚠️ `response_format` is ignored by OpenVINO Model Server: verbose_json,
     srt and vtt all return a bare {"text": ...}. There are no timestamps to
@@ -64,6 +71,8 @@ def transcribe(engine, path: pathlib.Path) -> str:
                      % (boundary, name, value)).encode())
 
     field("model", engine.model)
+    if language:
+        field("language", language)
     body.extend(("--%s\r\nContent-Disposition: form-data; name=\"file\"; "
                  "filename=\"%s\"\r\nContent-Type: audio/wav\r\n\r\n"
                  % (boundary, path.name)).encode())

@@ -86,12 +86,16 @@ device = "NPU"
 # ~/.config/geshtu/commandes.json first, then /etc/geshtu/commandes.json.
 # [dictation]
 #
-# ⚠️ NO `language` KEY HERE. engines.transcribe() never sends one, on
-# purpose (see its own docstring): forcing the wrong language produces
-# fluent nonsense with total confidence, and a short dictation clip is
-# exactly where that risk is highest, not a reason to override the rule.
+# The spoken language is NOT set here: see [transcription] below, and the
+# daemon's remembered choice (`geshtu entree`), which apply to dictation too.
 #
 # threshold = 0.75     # overrides the table's own "seuil" if set
+
+[transcription]
+# The SPOKEN language sent to Whisper, when nothing else was chosen. The
+# window's "Audio en" menu (or `geshtu entree`) is remembered and wins.
+# ⚠️ Whisper on OVMS does not detect per request (engines.transcribe()).
+language = "fr"
 
 [summary]
 # The summary language when nothing else was chosen. The choice made in the

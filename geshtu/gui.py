@@ -73,6 +73,16 @@ class Window(Gtk.ApplicationWindow):
         box.append(scroll)
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        # The SPOKEN language, separate from the summary's -- Whisper on OVMS
+        # does not detect it per request (engines.transcribe()).
+        row.append(Gtk.Label(label="Audio en", xalign=0))
+        self.entrees = ["fr", "en"]
+        self.entree = Gtk.DropDown(model=Gtk.StringList.new(["français", "english"]))
+        e = call({"cmd": "get-entree"}).get("langue_entree", "fr")
+        if e in self.entrees:
+            self.entree.set_selected(self.entrees.index(e))
+        self.entree.connect("notify::selected", self.set_entree)
+        row.append(self.entree)
         row.append(Gtk.Label(label="Summary in", xalign=0))
         self.lang = Gtk.DropDown(model=Gtk.StringList.new(["english", "français"]))
         # ⚠️ READ FROM THE DAEMON, WRITTEN BACK ON CHANGE: the drop-down used to
@@ -248,6 +258,13 @@ class Window(Gtk.ApplicationWindow):
     def set_language(self, _drop, _param) -> None:
         r = call({"cmd": "set-language", "language": self.lang_code()})
         self.log(r.get("error") or ("summary in %s from now on" % r["language"]))
+
+    def set_entree(self, _drop, _param) -> None:
+        i = self.entree.get_selected()
+        if not 0 <= i < len(self.entrees):
+            return
+        r = call({"cmd": "set-entree", "langue_entree": self.entrees[i]})
+        self.log(r.get("error") or ("audio en %s from now on" % r["langue_entree"]))
 
     def lire_bascule(self, _button) -> None:
         r = call({"cmd": "lire"})
