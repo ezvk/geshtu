@@ -139,7 +139,9 @@ class State:
     def traducteurs(self) -> list[str]:
         return sorted(self.cfg.raw.get("traduction", {}).get("moteurs", {}))
 
-    def traducteur(self) -> str:
+    # ⚠️ NOT `traducteur()`: `self.traducteur` is the live Traducteur object,
+    # and an instance attribute hides a method of the same name.
+    def traducteur_choisi(self) -> str:
         noms = self.traducteurs()
         choix = self.prefs.get("traducteur")
         return choix if choix in noms else (noms[0] if noms else "")
@@ -530,7 +532,7 @@ class Handler(socketserver.StreamRequestHandler):
         if cmd == "traduire-stop":
             return st.traducteur.stop()
         if cmd == "get-traducteur":
-            return {"ok": True, "traducteur": st.traducteur(), "choix": st.traducteurs()}
+            return {"ok": True, "traducteur": st.traducteur_choisi(), "choix": st.traducteurs()}
         if cmd == "set-traducteur":
             return st.set_traducteur(msg.get("traducteur", ""))
         if cmd == "get-cible":

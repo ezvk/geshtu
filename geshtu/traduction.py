@@ -218,7 +218,7 @@ class Traducteur:
         cfg = self.state.cfg
         eng = cfg.engine("llm")
         moteurs = cfg.raw.get("traduction", {}).get("moteurs", {})
-        choix = moteurs.get(self.state.traducteur())
+        choix = moteurs.get(self.state.traducteur_choisi())
         if choix:
             eng = dataclasses.replace(eng, endpoint=choix["endpoint"], model=choix["model"])
         else:
