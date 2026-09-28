@@ -591,10 +591,19 @@ def main() -> int:
     with Server(str(path), Handler) as server:
         os.chmod(path, 0o600)
         print("geshtu daemon on %s" % path, flush=True)
+        # ⚠️ SIGTERM IS HOW SYSTEMD STOPS US (every deploy, every restart), and
+        # without a handler Python dies on the spot: a live translation kept its
+        # source lowered and its pw-record running. shutdown() must come from
+        # another thread than serve_forever's.
+        import signal as _signal
+        _signal.signal(_signal.SIGTERM, lambda *_: threading.Thread(
+            target=server.shutdown, daemon=True).start())
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             pass
+        finally:
+            Handler.state.traducteur.stop()
     path.unlink(missing_ok=True)
     return 0
 

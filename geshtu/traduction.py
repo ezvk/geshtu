@@ -14,6 +14,7 @@ full stop.
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import pathlib
 import queue
@@ -64,6 +65,7 @@ class Traducteur:
         self.a_dire: queue.Queue = queue.Queue()
         self.seuil = SEUIL_VOIX
         self.baisse: tuple[int, float] | None = None   # (node id, volume d'origine)
+        self._reprise()
 
     def status(self) -> dict:
         with self.lock:
@@ -270,6 +272,33 @@ class Traducteur:
     #   speaker   wpctl 0.90 -> channelVolumes 0.728985 (= 0.9^3)
     #   HomePods  wpctl 0.35 -> 0.042875, wpctl 0.51 -> 0.132651
     # An amplitude factor r is a wpctl factor r^(1/3).
+    # ⚠️ A DAEMON KILLED MID-TRANSLATION LEFT THE SOURCE LOWERED FOR GOOD. Seen
+    # on utu 2026-09-28: a deploy restarted geshtu while Firefox was at 0.50;
+    # the next translation read 0.50 as the "original" and went to 0.25, and
+    # WirePlumber stored it -- every Firefox stream then started at 1.6 %
+    # amplitude. ezvk: « il est cassé le son ». The original volume is now
+    # written to disk BEFORE lowering, and a new daemon puts it back.
+    def _fichier_baisse(self) -> pathlib.Path:
+        return (pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
+                / "geshtu-traduction-baisse.json")
+
+    def _reprise(self) -> None:
+        f = self._fichier_baisse()
+        try:
+            node, v0 = json.loads(f.read_text())
+        except (OSError, ValueError):
+            return
+        try:
+            r = subprocess.run(["wpctl", "set-volume", str(node), "%.3f" % v0],
+                               capture_output=True, timeout=5)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.state.report("translation: could not restore node %s: %s" % (node, exc))
+            return
+        self.state.report("translation: a previous daemon left node %s lowered -- "
+                          "restored to %.2f%s" % (node, v0, "" if r.returncode == 0
+                                                  else " (stream gone: raise it by hand)"))
+        f.unlink(missing_ok=True)
+
     def _baisser(self, node: int) -> None:
         db = float(self.state.cfg.raw.get("traduction", {}).get("attenuation_db", 12))
         if db <= 0:
@@ -282,6 +311,7 @@ class Traducteur:
             self.state.report("translation: could not read the source volume: %s" % exc)
             return
         r = 10 ** (-db / 20)
+        self._fichier_baisse().write_text(json.dumps([node, v0]))
         subprocess.run(["wpctl", "set-volume", str(node), "%.3f" % (v0 * r ** (1 / 3))],
                        capture_output=True, timeout=5)
         self.baisse = (node, v0)
@@ -295,5 +325,9 @@ class Traducteur:
         node, v0 = self.baisse
         self.baisse = None
         # The stream may be gone (tab closed): nothing to restore, and no harm.
-        subprocess.run(["wpctl", "set-volume", str(node), "%.3f" % v0],
-                       capture_output=True, timeout=5)
+        try:
+            subprocess.run(["wpctl", "set-volume", str(node), "%.3f" % v0],
+                           capture_output=True, timeout=5)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.state.report("translation: could not restore the source: %s" % exc)
+        self._fichier_baisse().unlink(missing_ok=True)
