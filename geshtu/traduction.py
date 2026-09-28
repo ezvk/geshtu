@@ -68,7 +68,7 @@ class Traducteur:
         self.arret = threading.Event()
         self.a_dire: queue.Queue = queue.Queue()
         self.seuil = SEUIL_VOIX
-        self.baisse: tuple[int, float] | None = None   # (node id, volume d'origine)
+        self.baisse: tuple[int, float, str] | None = None   # (node, volume d'origine, application)
         self.contexte: list[tuple[str, str]] = []      # (phrase, traduction), les dernières
         self._reprise()
 
@@ -114,14 +114,17 @@ class Traducteur:
             self.voix = target.kind not in ("output",) and key != "default:output"
             self.seuil = SEUIL_VOIX
             self.baisse = None
-            if self.voix and target.kind == "app":
-                self._baisser(int(target.key.split(":", 1)[1]))
+            a_baisser = (int(target.key.split(":", 1)[1])
+                         if self.voix and target.kind == "app" else None)
             self.session, self.src = session, src
             self.etat, self.source, self.cible = "running", entree, cible
             self.lignes = []
             self.contexte = []
             self.arret.clear()
             self.a_dire = queue.Queue()
+        # Outside our lock: _baisser() reports, and report() takes the daemon's.
+        if a_baisser is not None:
+            self._baisser(a_baisser)
         threading.Thread(target=self._ecoute, args=(track.segments[0], entree, cible),
                          daemon=True).start()
         if self.voix:
@@ -321,19 +324,45 @@ class Traducteur:
     def _reprise(self) -> None:
         f = self._fichier_baisse()
         try:
-            node, v0 = json.loads(f.read_text())
+            raw = json.loads(f.read_text())
         except (OSError, ValueError):
             return
-        try:
-            r = subprocess.run(["wpctl", "set-volume", str(node), "%.3f" % v0],
-                               capture_output=True, timeout=5)
-        except (OSError, subprocess.SubprocessError) as exc:
-            self.state.report("translation: could not restore node %s: %s" % (node, exc))
+        node, v0 = raw[0], raw[1]
+        app = raw[2] if len(raw) > 2 else ""
+        self.state.report("translation: a previous daemon left %s lowered -- restoring %.2f"
+                          % (app or "node %s" % node, v0))
+        self._rendre(node, v0, app)
+
+    def _rendre(self, node: int, v0: float, app: str) -> None:
+        """Put v0 back on every stream of `app` (and on `node`); if none plays
+        right now, keep the file and watch for the next one."""
+        faits = self._regler(node, v0, app)
+        if faits or not app:
+            self._fichier_baisse().unlink(missing_ok=True)
             return
-        self.state.report("translation: a previous daemon left node %s lowered -- "
-                          "restored to %.2f%s" % (node, v0, "" if r.returncode == 0
-                                                  else " (stream gone: raise it by hand)"))
-        f.unlink(missing_ok=True)
+        def guette():
+            for _ in range(600):                        # 30 min, every 3 s
+                time.sleep(3)
+                if self._regler(None, v0, app):
+                    self.state.report("translation: %s volume restored to %.2f" % (app, v0))
+                    self._fichier_baisse().unlink(missing_ok=True)
+                    return
+        threading.Thread(target=guette, daemon=True).start()
+
+    def _regler(self, node, v0: float, app: str) -> int:
+        from geshtu.builtin.pipewire import _nodes
+        cibles = {n for n, p in _nodes().items() if app and p.get("application.name") == app}
+        if node is not None:
+            cibles.add(node)
+        n = 0
+        for c in cibles:
+            try:
+                r = subprocess.run(["wpctl", "set-volume", str(c), "%.3f" % v0],
+                                   capture_output=True, timeout=5)
+                n += r.returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                pass
+        return n
 
     def _baisser(self, node: int) -> None:
         db = float(self.state.cfg.raw.get("traduction", {}).get("attenuation_db", 12))
@@ -347,10 +376,12 @@ class Traducteur:
             self.state.report("translation: could not read the source volume: %s" % exc)
             return
         r = 10 ** (-db / 20)
-        self._fichier_baisse().write_text(json.dumps([node, v0]))
+        from geshtu.builtin.pipewire import _nodes
+        app = (_nodes().get(node) or {}).get("application.name") or ""
+        self._fichier_baisse().write_text(json.dumps([node, v0, app]))
         subprocess.run(["wpctl", "set-volume", str(node), "%.3f" % (v0 * r ** (1 / 3))],
                        capture_output=True, timeout=5)
-        self.baisse = (node, v0)
+        self.baisse = (node, v0, app)
         self.seuil = SEUIL_VOIX * r
         self.state.report("translation: source lowered by %.0f dB (wpctl %.2f -> %.2f)"
                           % (db, v0, v0 * r ** (1 / 3)))
@@ -358,12 +389,7 @@ class Traducteur:
     def _remonter(self) -> None:
         if not self.baisse:
             return
-        node, v0 = self.baisse
+        node, v0, app = self.baisse
         self.baisse = None
-        # The stream may be gone (tab closed): nothing to restore, and no harm.
-        try:
-            subprocess.run(["wpctl", "set-volume", str(node), "%.3f" % v0],
-                           capture_output=True, timeout=5)
-        except (OSError, subprocess.SubprocessError) as exc:
-            self.state.report("translation: could not restore the source: %s" % exc)
-        self._fichier_baisse().unlink(missing_ok=True)
+        # By APPLICATION: the lowered node may be gone and replaced (see _rendre).
+        self._rendre(node, v0, app)

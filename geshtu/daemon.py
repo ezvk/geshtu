@@ -368,13 +368,14 @@ class State:
         return out
 
     def start(self, keys: list[str], language: str, entree: str | None = None) -> dict:
+        # One capture at a time: both use the same capture sink. Asked BEFORE our
+        # lock (see status()).
+        if self.traducteur.status()["etat"] != "idle":
+            return {"ok": False, "error": "a live translation is running -- stop it first"}
         with self.lock:
             if self.session is not None:
                 return {"ok": False, "error": "already recording",
                         "session": self.session.id}
-            # One capture at a time: both use the same capture sink.
-            if self.traducteur.status()["etat"] != "idle":
-                return {"ok": False, "error": "a live translation is running -- stop it first"}
             root = self.cfg.sessions / time.strftime("%Y-%m-%d_%H-%M")
             root.mkdir(parents=True, exist_ok=True)
             session = models.Session(id=root.name, root=root, language=language,
@@ -449,6 +450,10 @@ class State:
         return {"ok": True, "session": session.id, "queued": True}
 
     def status(self) -> dict:
+        # ⚠️ READ THE HELPERS' STATE BEFORE TAKING OUR LOCK. They report() (our
+        # lock) while holding theirs; asking them while holding ours deadlocked
+        # the daemon on 2026-09-28. Never take another lock while holding one.
+        lecture, traduction_ = self.lecteur.status(), self.traducteur.status()
         with self.lock:
             s = self.session
             return {
@@ -463,8 +468,8 @@ class State:
                 "dictating": self.dictee_session is not None,
                 "commanding": self.commande_session is not None,
                 "log": self.log[-12:],
-                "lecture": self.lecteur.status(),
-                "traduction": self.traducteur.status(),
+                "lecture": lecture,
+                "traduction": traduction_,
             }
 
     def sessions(self) -> list[dict]:
