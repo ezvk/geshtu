@@ -135,6 +135,25 @@ class State:
         self.report("spoken language -> %s" % langue)
         return {"ok": True, "langue_entree": langue}
 
+    # -- which translator (named in [traduction.moteurs]) -----------------
+    def traducteurs(self) -> list[str]:
+        return sorted(self.cfg.raw.get("traduction", {}).get("moteurs", {}))
+
+    def traducteur(self) -> str:
+        noms = self.traducteurs()
+        choix = self.prefs.get("traducteur")
+        return choix if choix in noms else (noms[0] if noms else "")
+
+    def set_traducteur(self, nom: str) -> dict:
+        if nom not in self.traducteurs():
+            return {"ok": False, "error": "no translator %r (have: %s)"
+                    % (nom, ", ".join(self.traducteurs()))}
+        self.prefs["traducteur"] = nom
+        self._prefs_path().parent.mkdir(parents=True, exist_ok=True)
+        self._prefs_path().write_text(json.dumps(self.prefs, indent=2))
+        self.report("translator -> %s" % nom)
+        return {"ok": True, "traducteur": nom}
+
     # -- live translation target language ----------------------------------
     def langue_cible(self) -> str:
         return self.prefs.get("langue_cible") or "fr"
@@ -510,6 +529,10 @@ class Handler(socketserver.StreamRequestHandler):
                                        msg.get("cible") or st.langue_cible())
         if cmd == "traduire-stop":
             return st.traducteur.stop()
+        if cmd == "get-traducteur":
+            return {"ok": True, "traducteur": st.traducteur(), "choix": st.traducteurs()}
+        if cmd == "set-traducteur":
+            return st.set_traducteur(msg.get("traducteur", ""))
         if cmd == "get-cible":
             return {"ok": True, "langue_cible": st.langue_cible()}
         if cmd == "set-cible":

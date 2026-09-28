@@ -217,9 +217,15 @@ class Traducteur:
     def _traduit(self, texte: str, entree: str, cible: str) -> str:
         cfg = self.state.cfg
         eng = cfg.engine("llm")
-        modele = cfg.raw.get("traduction", {}).get("model")
-        if modele:
-            eng = dataclasses.replace(eng, model=modele)
+        moteurs = cfg.raw.get("traduction", {}).get("moteurs", {})
+        choix = moteurs.get(self.state.traducteur())
+        if choix:
+            eng = dataclasses.replace(eng, endpoint=choix["endpoint"], model=choix["model"])
+        else:
+            # Before named translators: a bare [traduction] model on the llm engine.
+            modele = cfg.raw.get("traduction", {}).get("model")
+            if modele:
+                eng = dataclasses.replace(eng, model=modele)
         consigne = ("Tu es un interprète. Traduis fidèlement ce texte parlé du %s "
                     "vers le %s. Réponds UNIQUEMENT par la traduction, sans guillemets, "
                     "sans commentaire, sans note." % (NOMS.get(entree, entree), NOMS[cible]))

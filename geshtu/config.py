@@ -55,6 +55,16 @@ endpoint = "http://localhost:8096/v3/embeddings"
 model = "embeddings"
 device = "GPU"
 
+# Live translation (geshtu/traduction.py): NAMED translators, one picked in the
+# window's "Traducteur" menu and remembered by the daemon. ezvk, 2026-09-28:
+# « par sélection dans le menu de gesh, chargé à la demande ».
+# `npu` = Qwen3-8B on utu's NPU, woken on demand behind :8092 (horde
+# hosts/utu/traduction.nix) -- works off the tailnet. Add others in
+# ~/.config/geshtu/geshtu.toml, e.g. [traduction.moteurs.ishtar].
+[traduction.moteurs.npu]
+endpoint = "http://localhost:8092/v3/chat/completions"
+model = "qwen3-8b"
+
 [engines.tts]
 # Read-aloud of the latest summary (geshtu/lecture.py). Kokoro on the NPU.
 # ⚠️ The language is sent per request (fr-fr / en-us, from the summary's own

@@ -142,7 +142,21 @@ class Window(Gtk.ApplicationWindow):
             "La source choisie, de « Audio en » vers « Traduire vers » : "
             "sous-titres ici, voix Kokoro dans le casque")
         self.traduire.connect("clicked", self.traduire_bascule)
-        box.append(self.traduire)
+        rangee = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.traduire.set_hexpand(True)
+        rangee.append(self.traduire)
+        rangee.append(Gtk.Label(label="Traducteur", xalign=0))
+        tr = call({"cmd": "get-traducteur"})
+        self.traducteurs = tr.get("choix") or ["—"]
+        self.traducteur = Gtk.DropDown(model=Gtk.StringList.new(self.traducteurs))
+        if tr.get("traducteur") in self.traducteurs:
+            self.traducteur.set_selected(self.traducteurs.index(tr["traducteur"]))
+        self.traducteur.set_tooltip_text(
+            "npu : Qwen3-8B sur le NPU d'utu, chargé à la demande (hors ligne aussi) ; "
+            "ishtar : Gemma, plus rapide, sur le tailnet")
+        self.traducteur.connect("notify::selected", self.set_traducteur)
+        rangee.append(self.traducteur)
+        box.append(rangee)
         self.sous_titres = Gtk.TextView(editable=False, wrap_mode=Gtk.WrapMode.WORD_CHAR)
         self.sous_titres.set_left_margin(8)
         self.sous_titres.set_right_margin(8)
@@ -282,6 +296,13 @@ class Window(Gtk.ApplicationWindow):
             return
         r = call({"cmd": "set-entree", "langue_entree": self.entrees[i]})
         self.log(r.get("error") or ("audio en %s from now on" % r["langue_entree"]))
+
+    def set_traducteur(self, _drop, _param) -> None:
+        i = self.traducteur.get_selected()
+        if not 0 <= i < len(self.traducteurs):
+            return
+        r = call({"cmd": "set-traducteur", "traducteur": self.traducteurs[i]})
+        self.log(r.get("error") or ("traducteur : %s" % r["traducteur"]))
 
     def set_cible(self, _drop, _param) -> None:
         i = self.cible.get_selected()
