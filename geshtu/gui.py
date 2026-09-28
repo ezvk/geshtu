@@ -86,14 +86,14 @@ class Window(Gtk.ApplicationWindow):
         # chinois japonais ». Whisper les transcrit ; chacun dans sa langue.
         self.entrees = ["fr", "en", "ru", "zh", "ja"]
         self.entree = Gtk.DropDown(model=Gtk.StringList.new(
-            ["français", "english", "русский", "中文", "日本語"]))
+            ["français", "anglais", "russe", "chinois", "japonais"]))
         e = call({"cmd": "get-entree"}).get("langue_entree", "fr")
         if e in self.entrees:
             self.entree.set_selected(self.entrees.index(e))
         self.entree.connect("notify::selected", self.set_entree)
         row.append(self.entree)
-        row.append(Gtk.Label(label="Summary in", xalign=0))
-        self.lang = Gtk.DropDown(model=Gtk.StringList.new(["english", "français"]))
+        row.append(Gtk.Label(label="Résumé en", xalign=0))
+        self.lang = Gtk.DropDown(model=Gtk.StringList.new(["anglais", "français"]))
         # ⚠️ READ FROM THE DAEMON, WRITTEN BACK ON CHANGE: the drop-down used to
         # come up on "english" at every launch, whatever was chosen last time.
         courante = call({"cmd": "get-language"}).get("language", "fr")
@@ -103,7 +103,7 @@ class Window(Gtk.ApplicationWindow):
         row.append(Gtk.Label(label="Traduire vers", xalign=0))
         self.cibles = ["fr", "en", "es", "it", "pt"]
         self.cible = Gtk.DropDown(model=Gtk.StringList.new(
-            ["français", "english", "español", "italiano", "português"]))
+            ["français", "anglais", "espagnol", "italien", "portugais"]))
         c = call({"cmd": "get-cible"}).get("langue_cible", "fr")
         if c in self.cibles:
             self.cible.set_selected(self.cibles.index(c))
