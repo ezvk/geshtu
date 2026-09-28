@@ -88,7 +88,8 @@ def transcribe(engine, path: pathlib.Path, language: str | None = None) -> str:
 
 def chat(engine, prompt: str, system: str = "", max_tokens: int = 1100,
          allow_truncated: bool = False,
-         history: list[tuple[str, str]] | None = None) -> str:
+         history: list[tuple[str, str]] | None = None,
+         temperature: float = 0.6) -> str:
     """One prompt in, one answer out.
 
     ⚠️ temperature 0.6, never 0: at zero, Qwen3 degenerates into loops.
@@ -109,7 +110,7 @@ def chat(engine, prompt: str, system: str = "", max_tokens: int = 1100,
     payload = {
         "model": engine.model,
         "messages": messages,
-        "temperature": 0.6,
+        "temperature": temperature,
         "max_tokens": max_tokens,
         "chat_template_kwargs": {"enable_thinking": False},
     }

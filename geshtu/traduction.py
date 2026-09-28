@@ -32,6 +32,9 @@ from geshtu.lecture import _riff, _wav
 # and one voice per language, the model's own.
 KOKORO = {"fr": ("fr-fr", "ff_siwis"), "en": ("en-us", "af_heart"),
           "es": ("es", "ef_dora"), "it": ("it", "if_sara"), "pt": ("pt-br", "pf_dora")}
+# Language names in English, for TranslateGemma's training prompt.
+ANGLAIS = {"fr": "French", "en": "English", "es": "Spanish", "it": "Italian",
+           "pt": "Portuguese", "ru": "Russian", "zh": "Chinese", "ja": "Japanese"}
 NOMS = {"fr": "français", "en": "anglais", "es": "espagnol", "it": "italien",
         "pt": "portugais", "ru": "russe", "zh": "chinois", "ja": "japonais"}
 
@@ -226,6 +229,8 @@ class Traducteur:
         choix = moteurs.get(self.state.traducteur_choisi())
         if choix:
             eng = dataclasses.replace(eng, endpoint=choix["endpoint"], model=choix["model"])
+            if choix.get("format") == "translategemma":
+                return self._translategemma(eng, texte, entree, cible)
         else:
             # Before named translators: a bare [traduction] model on the llm engine.
             modele = cfg.raw.get("traduction", {}).get("model")
@@ -244,6 +249,26 @@ class Traducteur:
         if trad:
             self.contexte = (self.contexte + [(texte, trad)])[-CONTEXTE:]
         return trad
+
+    # ⚠️ TRANSLATEGEMMA IS PROMPTED WITH ITS OWN TRAINING TURN, verbatim from
+    # its model card, sent as the user message through a passthrough chat
+    # template (horde hosts/utu/traduction.nix explains why the official
+    # template cannot be used). No system prompt, no history: the format has
+    # neither, so the context of the previous phrases is not used here.
+    # Measured 2026-09-28 on utu's GPU: 1.03 s/phrase, the cleanest French of
+    # the local models (no typo, idiomatic), close to Gemma 31B on ishtar.
+    def _translategemma(self, eng, texte: str, entree: str, cible: str) -> str:
+        src, dst = ANGLAIS.get(entree, entree), ANGLAIS.get(cible, cible)
+        invite = ("<start_of_turn>user\nYou are a professional %s (%s) to %s (%s) translator. "
+                  "Your goal is to accurately convey the meaning and nuances of the original %s "
+                  "text while adhering to %s grammar, vocabulary, and cultural sensitivities.\n"
+                  "Produce only the %s translation, without any additional explanations or "
+                  "commentary. Please translate the following %s text into %s:\n\n\n"
+                  "%s<end_of_turn>\n<start_of_turn>model\n"
+                  % (src, entree, dst, cible, src, dst, dst, src, dst, texte))
+        # temperature 0: the most likely translation, as measured -- not a draw.
+        return engines.chat(eng, invite, max_tokens=300, allow_truncated=True,
+                            temperature=0).strip()
 
     # -- the voice, one phrase after the other ----------------------------
     def _parle(self) -> None:

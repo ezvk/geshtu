@@ -58,12 +58,14 @@ device = "GPU"
 # Live translation (geshtu/traduction.py): NAMED translators, one picked in the
 # window's "Traducteur" menu and remembered by the daemon. ezvk, 2026-09-28:
 # « par sélection dans le menu de gesh, chargé à la demande ».
-# `npu` = Qwen3-8B on utu's NPU, woken on demand behind :8092 (horde
-# hosts/utu/traduction.nix) -- works off the tailnet. Add others in
-# ~/.config/geshtu/geshtu.toml, e.g. [traduction.moteurs.ishtar].
-[traduction.moteurs.npu]
+# `local` = TranslateGemma 4B on utu's GPU, woken on demand behind :8092
+# (horde hosts/utu/traduction.nix) -- works off the tailnet. `format =
+# "translategemma"`: the model's own training prompt (see traduction.py).
+# Add others in ~/.config/geshtu/geshtu.toml, e.g. [traduction.moteurs.ishtar].
+[traduction.moteurs.local]
 endpoint = "http://localhost:8092/v3/chat/completions"
-model = "qwen3-8b"
+model = "translategemma"
+format = "translategemma"
 
 [engines.tts]
 # Read-aloud of the latest summary (geshtu/lecture.py). Kokoro on the NPU.
