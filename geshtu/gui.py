@@ -82,8 +82,11 @@ class Window(Gtk.ApplicationWindow):
         # The SPOKEN language, separate from the summary's -- Whisper on OVMS
         # does not detect it per request (engines.transcribe()).
         row.append(Gtk.Label(label="Audio en", xalign=0))
-        self.entrees = ["fr", "en"]
-        self.entree = Gtk.DropDown(model=Gtk.StringList.new(["français", "english"]))
+        # ezvk, 2026-09-28 : « comme langue de source audio rajoute russe
+        # chinois japonais ». Whisper les transcrit ; chacun dans sa langue.
+        self.entrees = ["fr", "en", "ru", "zh", "ja"]
+        self.entree = Gtk.DropDown(model=Gtk.StringList.new(
+            ["français", "english", "русский", "中文", "日本語"]))
         e = call({"cmd": "get-entree"}).get("langue_entree", "fr")
         if e in self.entrees:
             self.entree.set_selected(self.entrees.index(e))

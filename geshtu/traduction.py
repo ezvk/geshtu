@@ -31,7 +31,7 @@ from geshtu.lecture import _riff, _wav
 KOKORO = {"fr": ("fr-fr", "ff_siwis"), "en": ("en-us", "af_heart"),
           "es": ("es", "ef_dora"), "it": ("it", "if_sara"), "pt": ("pt-br", "pf_dora")}
 NOMS = {"fr": "français", "en": "anglais", "es": "espagnol", "it": "italien",
-        "pt": "portugais"}
+        "pt": "portugais", "ru": "russe", "zh": "chinois", "ja": "japonais"}
 
 RATE = 16000
 TRAME = 480                 # 30 ms at 16 kHz
