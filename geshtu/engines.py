@@ -87,7 +87,8 @@ def transcribe(engine, path: pathlib.Path, language: str | None = None) -> str:
 
 
 def chat(engine, prompt: str, system: str = "", max_tokens: int = 1100,
-         allow_truncated: bool = False) -> str:
+         allow_truncated: bool = False,
+         history: list[tuple[str, str]] | None = None) -> str:
     """One prompt in, one answer out.
 
     ⚠️ temperature 0.6, never 0: at zero, Qwen3 degenerates into loops.
@@ -100,6 +101,10 @@ def chat(engine, prompt: str, system: str = "", max_tokens: int = 1100,
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
+    # Earlier exchanges, as real turns: the model sees what it already said.
+    for question, answer in history or []:
+        messages.append({"role": "user", "content": question})
+        messages.append({"role": "assistant", "content": answer})
     messages.append({"role": "user", "content": prompt})
     payload = {
         "model": engine.model,

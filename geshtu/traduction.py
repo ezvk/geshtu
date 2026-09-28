@@ -41,6 +41,7 @@ SEUIL_VOIX = 700            # int16 RMS, ~ -33 dBFS: below is a pause
 PAUSE = 0.6                 # seconds of pause that end a phrase
 MIN_VOIX = 0.8              # a phrase needs at least this much speech
 MAX_PHRASE = 12.0           # cut anyway: nobody waits longer than this
+CONTEXTE = 2                # previous phrases sent with each one, with their translation
 
 # Whisper's known inventions on near-silence. A clip that says only this is
 # dropped rather than translated and spoken.
@@ -65,6 +66,7 @@ class Traducteur:
         self.a_dire: queue.Queue = queue.Queue()
         self.seuil = SEUIL_VOIX
         self.baisse: tuple[int, float] | None = None   # (node id, volume d'origine)
+        self.contexte: list[tuple[str, str]] = []      # (phrase, traduction), les dernières
         self._reprise()
 
     def status(self) -> dict:
@@ -114,6 +116,7 @@ class Traducteur:
             self.session, self.src = session, src
             self.etat, self.source, self.cible = "running", entree, cible
             self.lignes = []
+            self.contexte = []
             self.arret.clear()
             self.a_dire = queue.Queue()
         threading.Thread(target=self._ecoute, args=(track.segments[0], entree, cible),
@@ -231,8 +234,16 @@ class Traducteur:
         consigne = ("Tu es un interprète. Traduis fidèlement ce texte parlé du %s "
                     "vers le %s. Réponds UNIQUEMENT par la traduction, sans guillemets, "
                     "sans commentaire, sans note." % (NOMS.get(entree, entree), NOMS[cible]))
-        return engines.chat(eng, texte, system=consigne, max_tokens=300,
-                            allow_truncated=True).strip()
+        # ⚠️ CONTEXT AS PAST TURNS, not pasted into the prompt. ezvk, 2026-09-28:
+        # « donne du contexte ». A phrase cut on a pause loses its subject; the
+        # two previous phrases and THEIR translations, given as exchanges already
+        # made, carry names, topic and register -- and, being answers the model
+        # "already gave", they are not translated a second time.
+        trad = engines.chat(eng, texte, system=consigne, max_tokens=300,
+                            allow_truncated=True, history=self.contexte[-CONTEXTE:]).strip()
+        if trad:
+            self.contexte = (self.contexte + [(texte, trad)])[-CONTEXTE:]
+        return trad
 
     # -- the voice, one phrase after the other ----------------------------
     def _parle(self) -> None:
