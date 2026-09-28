@@ -146,11 +146,9 @@ class Window(Gtk.ApplicationWindow):
         self.traduire.set_hexpand(True)
         rangee.append(self.traduire)
         rangee.append(Gtk.Label(label="Traducteur", xalign=0))
-        tr = call({"cmd": "get-traducteur"})
-        self.traducteurs = tr.get("choix") or ["—"]
+        self.traducteurs = ["—"]
         self.traducteur = Gtk.DropDown(model=Gtk.StringList.new(self.traducteurs))
-        if tr.get("traducteur") in self.traducteurs:
-            self.traducteur.set_selected(self.traducteurs.index(tr["traducteur"]))
+        self.charge_traducteurs()
         self.traducteur.set_tooltip_text(
             "npu : Qwen3-8B sur le NPU d'utu, chargé à la demande (hors ligne aussi) ; "
             "ishtar : Gemma, plus rapide, sur le tailnet")
@@ -297,7 +295,25 @@ class Window(Gtk.ApplicationWindow):
         r = call({"cmd": "set-entree", "langue_entree": self.entrees[i]})
         self.log(r.get("error") or ("audio en %s from now on" % r["langue_entree"]))
 
+    def charge_traducteurs(self) -> None:
+        # ⚠️ RE-ASKED UNTIL THE DAEMON ANSWERS. A window opened while the daemon
+        # was restarting got nothing and kept a lone "—" for good -- ezvk: « y a
+        # pas le toggle translate ish / local ». apply() calls this again while
+        # the list is still empty.
+        tr = call({"cmd": "get-traducteur"})
+        choix = tr.get("choix") or []
+        if not choix:
+            return
+        self.traducteurs = choix
+        self.recharge = True          # a reload is not a choice: do not save it
+        self.traducteur.set_model(Gtk.StringList.new(choix))
+        if tr.get("traducteur") in choix:
+            self.traducteur.set_selected(choix.index(tr["traducteur"]))
+        self.recharge = False
+
     def set_traducteur(self, _drop, _param) -> None:
+        if getattr(self, "recharge", False):
+            return
         i = self.traducteur.get_selected()
         if not 0 <= i < len(self.traducteurs):
             return
@@ -406,6 +422,8 @@ class Window(Gtk.ApplicationWindow):
         self.openfile.set_sensitive(not self.busy and not self.recording)
         tr = r.get("traduction") or {}
         self.traduction_active = tr.get("etat") == "running"
+        if self.traducteurs == ["—"]:
+            self.charge_traducteurs()
         self.sources_menu.set_sensitive(not self.recording and not self.traduction_active)
         self.traduire.set_label("⏹ Arrêter la traduction" if self.traduction_active
                                 else "🌐 Traduire en direct")
