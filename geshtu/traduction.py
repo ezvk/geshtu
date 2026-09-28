@@ -17,6 +17,7 @@ import dataclasses
 import os
 import pathlib
 import queue
+import re
 import struct
 import subprocess
 import threading
@@ -61,6 +62,8 @@ class Traducteur:
         self.src = None
         self.arret = threading.Event()
         self.a_dire: queue.Queue = queue.Queue()
+        self.seuil = SEUIL_VOIX
+        self.baisse: tuple[int, float] | None = None   # (node id, volume d'origine)
 
     def status(self) -> dict:
         with self.lock:
@@ -102,6 +105,10 @@ class Traducteur:
             # again, in a loop. An application stream is captured on its own
             # sink and does not hear Kokoro. Subtitles only, and said so.
             self.voix = target.kind not in ("output",) and key != "default:output"
+            self.seuil = SEUIL_VOIX
+            self.baisse = None
+            if self.voix and target.kind == "app":
+                self._baisser(int(target.key.split(":", 1)[1]))
             self.session, self.src = session, src
             self.etat, self.source, self.cible = "running", entree, cible
             self.lignes = []
@@ -127,6 +134,7 @@ class Traducteur:
         except Exception as exc:                       # noqa: BLE001
             self.state.report("stopping the capture: %s" % exc)
         self.a_dire.put(None)
+        self._remonter()
         # The capture grows at 32 kB/s in XDG_RUNTIME_DIR (RAM): drop it.
         for f in session.root.iterdir():
             if f.suffix == ".wav":
@@ -161,7 +169,7 @@ class Traducteur:
                 n = len(trame) // 2
                 ech = struct.unpack("<%dh" % n, trame)
                 rms = (sum(x * x for x in ech) / n) ** 0.5
-                if rms >= SEUIL_VOIX:
+                if rms >= self.seuil:
                     voix += TRAME / RATE
                     pause = 0.0
                     phrase += trame
@@ -241,3 +249,45 @@ class Traducteur:
             except OSError:
                 return
             subprocess.run(["pw-play", str(f)], check=False)
+
+    # -- lower the source while Kokoro speaks over it ------------------------
+    #
+    # ezvk, 2026-09-28 : « quand on traduit en presque temps réel il faudrait
+    # baisser l'audio de la source pour mieux entendre koko ».
+    #
+    # ⚠️ THE CAPTURE HEARS THE LOWERED STREAM TOO. geshtu taps the application's
+    # output ports, which PipeWire feeds AFTER the stream volume. Lowering the
+    # source therefore lowers what Whisper gets and what the pause detector
+    # measures -- so the voice threshold is scaled by the same amplitude factor.
+    #
+    # ⚠️ AND wpctl IS CUBIC. Read on utu (2026-09-28), nothing changed:
+    #   speaker   wpctl 0.90 -> channelVolumes 0.728985 (= 0.9^3)
+    #   HomePods  wpctl 0.35 -> 0.042875, wpctl 0.51 -> 0.132651
+    # An amplitude factor r is a wpctl factor r^(1/3).
+    def _baisser(self, node: int) -> None:
+        db = float(self.state.cfg.raw.get("traduction", {}).get("attenuation_db", 12))
+        if db <= 0:
+            return
+        try:
+            out = subprocess.run(["wpctl", "get-volume", str(node)],
+                                 capture_output=True, text=True, timeout=5).stdout
+            v0 = float(re.search(r"Volume:\s*([\d.]+)", out).group(1))
+        except Exception as exc:                       # noqa: BLE001
+            self.state.report("translation: could not read the source volume: %s" % exc)
+            return
+        r = 10 ** (-db / 20)
+        subprocess.run(["wpctl", "set-volume", str(node), "%.3f" % (v0 * r ** (1 / 3))],
+                       capture_output=True, timeout=5)
+        self.baisse = (node, v0)
+        self.seuil = SEUIL_VOIX * r
+        self.state.report("translation: source lowered by %.0f dB (wpctl %.2f -> %.2f)"
+                          % (db, v0, v0 * r ** (1 / 3)))
+
+    def _remonter(self) -> None:
+        if not self.baisse:
+            return
+        node, v0 = self.baisse
+        self.baisse = None
+        # The stream may be gone (tab closed): nothing to restore, and no harm.
+        subprocess.run(["wpctl", "set-volume", str(node), "%.3f" % v0],
+                       capture_output=True, timeout=5)
