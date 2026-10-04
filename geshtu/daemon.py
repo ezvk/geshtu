@@ -238,6 +238,36 @@ class State:
         self.report("engine %s -> %s" % (engine, model))
         return {"ok": True, "engine": engine, "model": model}
 
+    def _verifier_modeles(self) -> None:
+        """Drop a chosen model that its server no longer serves.
+
+        ⚠️ A CHOICE OUTLIVES THE SERVER'S MENU. On 2026-10-04 every summary
+        failed with « 400 Invalid model name passed in model=general-muse »:
+        the LiteLLM role had been removed two days earlier, and the choice
+        kept in engines.json -- which wins over the config -- went on asking
+        for it, with nothing visible but a missing summary. Checked before
+        each session: a model the server does not list is forgotten, the
+        configured one takes over, and the log says so. An unreachable server
+        proves nothing about the name, so the choice is then left alone.
+        """
+        changed = False
+        for name, chosen in list(self.models.items()):
+            if name not in self.cfg.engines:
+                continue
+            try:
+                offered = [m["name"] for m in
+                           engines.available(self.active().engines[name])]
+            except RuntimeError:
+                continue
+            if offered and chosen not in offered:
+                del self.models[name]
+                changed = True
+                self.report("engine %s: %r is no longer served -> back to %r"
+                            % (name, chosen, self.cfg.engines[name].model))
+        if changed:
+            self._models_path().parent.mkdir(parents=True, exist_ok=True)
+            self._models_path().write_text(json.dumps(self.models, indent=2))
+
     def list_models(self) -> dict:
         out = {}
         for name, eng in sorted(self.active().engines.items()):
@@ -266,6 +296,7 @@ class State:
             with self.lock:
                 self.busy = session.id
             try:
+                self._verifier_modeles()
                 pipeline.process(session, self.active(), self.report)
             except Exception:                            # noqa: BLE001
                 self.report(traceback.format_exc())
