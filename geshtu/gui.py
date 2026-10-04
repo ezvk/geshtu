@@ -169,6 +169,7 @@ class Window(Gtk.ApplicationWindow):
         # because which model is loaded changes under you.
         self.engines = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         exp = Gtk.Expander(label="Engines", child=self.engines)
+        self.engines_exp = exp
         box.append(exp)
         exp.connect("notify::expanded", self.on_engines)
 
@@ -238,6 +239,15 @@ class Window(Gtk.ApplicationWindow):
             child = nxt
         r = call({"cmd": "models"})
         for name, row in r.get("engines", {}).items():
+            # The server, editable: Enter probes it and keeps it, an empty
+            # field goes back to the config (Jan, a test box...).
+            adresse = Gtk.Entry(text=row.get("endpoint", ""), hexpand=True)
+            adresse.set_placeholder_text(row.get("configured", ""))
+            adresse.set_tooltip_text("server for %s -- e.g. localhost:1337 "
+                                     "(Jan); empty = %s"
+                                     % (name, row.get("configured", "")))
+            adresse.connect("activate", self.set_endpoint, name)
+            self.engines.append(adresse)
             line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             # "declared" plutot que le seul nom : le champ peut mentir.
             tag = Gtk.Label(label="%s (%s declared)" % (name, row["device"]),
@@ -257,6 +267,15 @@ class Window(Gtk.ApplicationWindow):
             drop.connect("notify::selected", self.set_model, name, names)
             line.append(drop)
             self.engines.append(line)
+
+    def set_endpoint(self, entry, engine) -> None:
+        r = call({"cmd": "set-endpoint", "engine": engine,
+                  "endpoint": entry.get_text()})
+        self.log(r.get("error") or ("%s -> %s (model %s)"
+                                    % (engine, r["endpoint"], r["model"])))
+        if r.get("ok"):
+            # The model list belongs to the server: rebuild it.
+            self.on_engines(self.engines_exp, None)
 
     def set_model(self, drop, _param, engine, names) -> None:
         i = drop.get_selected()

@@ -5,7 +5,29 @@ from __future__ import annotations
 import json
 import pathlib
 import urllib.request
+import re
 import uuid
+
+
+def endpoint_for(saisie: str, configured: str) -> str:
+    """The address typed in the window, made into a full endpoint.
+
+    What one types is a SERVER -- « localhost:1337 », « http://utu:8080/v1 »
+    -- while an engine needs the full route it posts to. The route is taken
+    from the configured endpoint, so an llm engine stays on
+    /v1/chat/completions and an embed engine on /v1/embeddings whatever the
+    server. A full route typed in is kept as is. Empty = back to the config.
+    """
+    url = saisie.strip()
+    if not url:
+        return configured
+    if "://" not in url:
+        url = "http://" + url
+    if re.search(r"/v[13]/.+", url):
+        return url
+    base = re.sub(r"/v[13]$", "", url.rstrip("/"))
+    m = re.search(r"/v[13]/.*$", configured)
+    return base + (m.group(0) if m else "/v1/chat/completions")
 
 
 def available(engine) -> list[dict]:

@@ -19,6 +19,7 @@ dependency, and anything that can write a line can drive it:
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import pathlib
@@ -67,6 +68,7 @@ class State:
         self.jobs: queue.Queue = queue.Queue()
         self.sources = {n: c() for n, c in plugins.sources().items()}
         self.models = self._load_models()
+        self.endpoints = self._load_endpoints()
         self.prefs = self._load_prefs()
         self.lecteur = lecture.Lecteur(self)
         self.traducteur = traduction.Traducteur(self)
@@ -85,6 +87,51 @@ class State:
             return json.loads(self._models_path().read_text())
         except (OSError, ValueError):
             return {}
+
+    # ⚠️ AND WHICH SERVER, chosen the same way. ezvk, 2026-10-04 : « il faut
+    # que je puisse saisir l'adresse du llm, comme ça je peux utiliser le
+    # llama de Jan quand il tourne ». An empty address puts the configured
+    # one back.
+    def _endpoints_path(self) -> pathlib.Path:
+        return self.cfg.sessions / "endpoints.json"
+
+    def _load_endpoints(self) -> dict:
+        try:
+            return json.loads(self._endpoints_path().read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def set_endpoint(self, engine: str, saisie: str) -> dict:
+        if engine not in self.cfg.engines:
+            return {"ok": False, "error": "no engine named %r" % engine}
+        configured = self.cfg.engines[engine].endpoint
+        url = engines.endpoint_for(saisie, configured)
+        trial = dataclasses.replace(self.active().engines[engine], endpoint=url)
+        # ⚠️ PROBED BEFORE IT IS KEPT. A typo would otherwise sit there until
+        # the next meeting's summary fails, an hour later, with the room gone.
+        try:
+            offered = [m["name"] for m in engines.available(trial)]
+        except RuntimeError as exc:
+            return {"ok": False, "error": str(exc)}
+        if url == configured:
+            self.endpoints.pop(engine, None)
+        else:
+            self.endpoints[engine] = url
+        # The model chosen for the old server rarely exists on the new one
+        # (« general » is a LiteLLM role, Jan names its GGUF). Take the first
+        # it serves rather than keep a name that will 404.
+        note = ""
+        current = self.active().engines[engine].model
+        if offered and current not in offered:
+            self.models[engine] = offered[0]
+            self._models_path().parent.mkdir(parents=True, exist_ok=True)
+            self._models_path().write_text(json.dumps(self.models, indent=2))
+            note = " (model -> %s)" % offered[0]
+        self._endpoints_path().parent.mkdir(parents=True, exist_ok=True)
+        self._endpoints_path().write_text(json.dumps(self.endpoints, indent=2))
+        self.report("engine %s at %s%s" % (engine, url, note))
+        return {"ok": True, "engine": engine, "endpoint": url,
+                "model": self.active().engines[engine].model}
 
     # -- summary language -------------------------------------------------
     #
@@ -172,13 +219,13 @@ class State:
 
     def active(self) -> config.Config:
         """The config as it stands, with any chosen models applied."""
-        return self.cfg.with_models(self.models)
+        return self.cfg.with_models(self.models, self.endpoints)
 
     def set_model(self, engine: str, model: str) -> dict:
         if engine not in self.cfg.engines:
             return {"ok": False, "error": "no engine named %r" % engine}
         try:
-            offered = [m["name"] for m in engines.available(self.cfg.engine(engine))]
+            offered = [m["name"] for m in engines.available(self.active().engine(engine))]
         except RuntimeError as exc:
             return {"ok": False, "error": str(exc)}
         if model not in offered:
@@ -193,9 +240,10 @@ class State:
 
     def list_models(self) -> dict:
         out = {}
-        for name, eng in sorted(self.cfg.engines.items()):
+        for name, eng in sorted(self.active().engines.items()):
             row = {"device": eng.device, "endpoint": eng.endpoint,
-                   "current": self.models.get(name, eng.model)}
+                   "configured": self.cfg.engines[name].endpoint,
+                   "current": eng.model}
             try:
                 row["available"] = engines.available(eng)
             except RuntimeError as exc:
@@ -566,6 +614,8 @@ class Handler(socketserver.StreamRequestHandler):
             return st.list_models()
         if cmd == "set-model":
             return st.set_model(msg["engine"], msg["model"])
+        if cmd == "set-endpoint":
+            return st.set_endpoint(msg["engine"], msg.get("endpoint", ""))
         if cmd == "ping":
             return {"ok": True}
         return {"ok": False, "error": "unknown command %r" % cmd}

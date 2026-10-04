@@ -239,6 +239,16 @@ def main(argv: list[str] | None = None) -> int:
         print(r.get("error") or ("%s -> %s" % (r["engine"], r["model"])))
         return 0 if r.get("ok") else 1
 
+    if cmd == "endpoint":
+        if not rest:
+            print("usage: geshtu endpoint <engine> [address]   (empty = back to the config)")
+            return 1
+        r = call({"cmd": "set-endpoint", "engine": rest[0],
+                  "endpoint": rest[1] if len(rest) > 1 else ""})
+        print(r.get("error") or ("%s -> %s  (model %s)"
+                                 % (r["engine"], r["endpoint"], r["model"])))
+        return 0 if r.get("ok") else 1
+
     if cmd == "dictee":
         return _bascule("dictee", "dictee")
 

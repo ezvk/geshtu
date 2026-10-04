@@ -160,7 +160,7 @@ class Config:
             raise SystemExit(
                 "no engine named %r; declare [engines.%s] in the config" % (name, name))
 
-    def with_models(self, chosen: dict) -> "Config":
+    def with_models(self, chosen: dict, endpoints: dict | None = None) -> "Config":
         """A copy of this config with some engines pointed at another model.
 
         ⚠️ WHICH MODEL IS RUNNING CHANGES UNDER YOU. A model server is
@@ -169,12 +169,18 @@ class Config:
         that only a rebuild can change turns an ordinary Tuesday into an
         outage, so the choice is runtime state, kept beside the sessions.
         """
-        if not chosen:
+        endpoints = endpoints or {}
+        if not chosen and not endpoints:
             return self
         engines = {}
         for name, eng in self.engines.items():
-            engines[name] = dataclasses.replace(eng, model=chosen[name]) \
-                if chosen.get(name) else eng
+            if chosen.get(name):
+                eng = dataclasses.replace(eng, model=chosen[name])
+            # Same reasoning for WHERE the model runs: a server started by
+            # hand (Jan's llama, a test box) is runtime state, not config.
+            if endpoints.get(name):
+                eng = dataclasses.replace(eng, endpoint=endpoints[name])
+            engines[name] = eng
         return dataclasses.replace(self, engines=engines)
 
 
