@@ -204,6 +204,15 @@ class Item:
 
     # ----------------------------------------------------------- actions
     def toggle(self) -> None:
+        # ⚠️ `listening`, NOT `recording`: during a dictation the icon shows
+        # the red dot, so a middle click must end it. Testing `recording`
+        # alone STARTED a meeting instead (ezvk, 2026-10-08, see
+        # daemon._abandonne_courte). Checked before `busy`: a dictation can
+        # run while a meeting is still being processed.
+        if self.listening and not self.recording:
+            call({"cmd": "stop"})
+            self.tick()
+            return
         if self.busy:
             return
         if self.recording:

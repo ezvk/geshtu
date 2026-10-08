@@ -33,6 +33,7 @@ class Window(Gtk.ApplicationWindow):
         self.set_default_size(620, 620)
         self.busy = False
         self.recording = False
+        self.courte = False
         self.traduction_active = False
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -286,6 +287,12 @@ class Window(Gtk.ApplicationWindow):
 
     # ------------------------------------------------------------- actions
     def toggle(self, _button) -> None:
+        # ⚠️ A dictation or voice command first, and before `busy`: the button
+        # used to read "Start recording" during one and started a meeting
+        # (same fault as the tray, see daemon._abandonne_courte).
+        if self.courte and not self.recording:
+            self.stop()
+            return
         if self.busy:
             return
         if self.recording:
@@ -410,7 +417,10 @@ class Window(Gtk.ApplicationWindow):
         nothing to wait for here. That is the whole reason it exists: the
         window can be closed while an hour of audio is being transcribed."""
         r = call({"cmd": "stop"})
-        self.log(r.get("error") or ("stopped %s" % r.get("session")))
+        if r.get("discarded"):
+            self.log("%s arrêtée, rien transcrit" % r.get("session"))
+        else:
+            self.log(r.get("error") or ("stopped %s" % r.get("session")))
         self.tick()
 
     # ---------------------------------------------------------------- state
@@ -423,10 +433,16 @@ class Window(Gtk.ApplicationWindow):
     def apply(self, r) -> bool:
         self.recording = bool(r.get("recording"))
         self.busy = bool(r.get("processing"))
+        self.courte = bool(r.get("dictating") or r.get("commanding"))
         if self.recording:
             self.state.set_text("recording %s   %s"
                                 % (r["recording"], hms(r.get("duration", 0))))
             self.button.set_label("Stop and summarise")
+            self.button.remove_css_class("suggested-action")
+            self.button.add_css_class("destructive-action")
+        elif self.courte:
+            self.state.set_text("dictée en cours" if r.get("dictating") else "commande en cours")
+            self.button.set_label("Arrêter sans transcrire")
             self.button.remove_css_class("suggested-action")
             self.button.add_css_class("destructive-action")
         elif self.busy:
@@ -437,7 +453,7 @@ class Window(Gtk.ApplicationWindow):
             self.button.set_label("Start recording")
             self.button.remove_css_class("destructive-action")
             self.button.add_css_class("suggested-action")
-        self.button.set_sensitive(not self.busy)
+        self.button.set_sensitive(not self.busy or self.courte)
         self.openfile.set_sensitive(not self.busy and not self.recording)
         tr = r.get("traduction") or {}
         self.traduction_active = tr.get("etat") == "running"

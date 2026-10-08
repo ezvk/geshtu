@@ -356,6 +356,42 @@ class State:
             return ""
         return engines.transcribe(self.cfg.engine("asr"), wav, self.langue_entree())
 
+    def _abandonne_courte(self) -> dict | None:
+        """End a running dictation or voice command WITHOUT transcribing it.
+        Caller holds `self.lock`.
+
+        ⚠️ MEASURED, NOT THEORETICAL. ezvk, 2026-10-08: « il se coince tout
+        le temps », « je peux pas le couper ». A dictation started at 08:32
+        (Super+Shift+F23, the Copilot key -- easy to hit by accident) ran
+        until 12:21: 416 MB of WAV in tmpfs. The tray showed the red dot,
+        but the only way out was the dictation key itself, and `stop` --
+        the window's button, `geshtu stop`, Super+Shift+Ctrl+M -- answered
+        "not recording". Worse, the tray's middle click STARTED two meetings
+        (09:16, 09:17) instead of ending the dictation.
+
+        ⚠️ DISCARD, DO NOT TRANSCRIBE. Stopping through the dictation key
+        types the result into the focused window; a capture someone is
+        trying to get rid of must never do that -- after hours, it would be
+        hours of text. The WAV is deleted: it lives in XDG_RUNTIME_DIR, RAM.
+        """
+        for nom, attr, libelle in (("dictee", "dictee_session", "dictée"),
+                                   ("commande", "commande_session", "commande")):
+            session = getattr(self, attr)
+            if session is None:
+                continue
+            setattr(self, attr, None)
+            self.source_for(session).stop(session)
+            for track in session.tracks:
+                for segment in track.segments:
+                    try:
+                        segment.unlink()
+                    except OSError:
+                        pass
+            self.report("%s : arrêtée sans transcription" % libelle)
+            commandes.dire("%s annulée" % libelle.capitalize())
+            return {"ok": True, "session": nom, "discarded": True}
+        return None
+
     def dictee(self) -> dict:
         with self.lock:
             if self.dictee_session is None:
@@ -507,7 +543,8 @@ class State:
         with self.lock:
             session = self.session
             if session is None:
-                return {"ok": False, "error": "not recording"}
+                courte = self._abandonne_courte()
+                return courte or {"ok": False, "error": "not recording"}
             self.source_for(session).stop(session)
             session.ended = time.time()
             self.session = None

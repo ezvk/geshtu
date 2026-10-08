@@ -177,7 +177,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd == "stop":
         r = call({"cmd": "stop"})
-        print(r.get("error") or ("stopped %s, processing queued" % r.get("session")))
+        if r.get("discarded"):
+            print("%s arrêtée, rien transcrit" % r.get("session"))
+        else:
+            print(r.get("error") or ("stopped %s, processing queued" % r.get("session")))
         return 0 if r.get("ok") else 1
 
     if cmd == "status":
