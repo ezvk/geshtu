@@ -68,8 +68,10 @@ model = "translategemma"
 format = "translategemma"
 
 [engines.tts]
-# Read-aloud of the latest summary (geshtu/lecture.py). Kokoro on the NPU.
-# ⚠️ The language is sent per request (fr-fr / en-us, from the summary's own
+# Read-aloud of the latest summary and of the selected text (geshtu/lecture.py).
+# Kokoro on the NPU.
+# ⚠️ The language is sent per request (fr-fr / en-us…, from the summary's own
+# language, or guessed from the selection's function words, else [summary]
 # language): without it Kokoro phonemises French with English rules.
 endpoint = "http://localhost:8098/v3/audio/speech"
 model = "kokoro"

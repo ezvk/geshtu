@@ -26,12 +26,9 @@ import time
 import wave
 
 from geshtu import engines, models
-from geshtu.lecture import _riff, _wav
-
-# Kokoro's phonemisation codes (docs/model_server_rest_api_text_to_speech.md)
-# and one voice per language, the model's own.
-KOKORO = {"fr": ("fr-fr", "ff_siwis"), "en": ("en-us", "af_heart"),
-          "es": ("es", "ef_dora"), "it": ("it", "if_sara"), "pt": ("pt-br", "pf_dora")}
+# Kokoro's phonemisation codes and one voice per language: one table, in
+# lecture.py, shared with the read-aloud of the selection.
+from geshtu.lecture import KOKORO, _riff, _wav
 # Language names in English, for TranslateGemma's training prompt.
 ANGLAIS = {"fr": "French", "en": "English", "es": "Spanish", "it": "Italian",
            "pt": "Portuguese", "ru": "Russian", "zh": "Chinese", "ja": "Japanese"}

@@ -22,6 +22,11 @@ USAGE = """geshtu — self-hosted meeting intelligence
   geshtu models remove <name>      stop serving it
   geshtu dictee                     press once to start, again to type
   geshtu commande                   press once to start, again to execute
+  geshtu lire                      read the selected text aloud (Kokoro);
+                                   again = pause / resume, a new selection replaces
+  geshtu lire --resume             read the latest summary aloud
+  geshtu lire <text>               read this text
+  geshtu lire-stop                 stop reading
   geshtu bilan                      score history for the command table
   geshtu daemon                    run the daemon in the foreground
 
@@ -32,8 +37,8 @@ Options:
   geshtu entree [fr|en|…]          show or set the remembered SPOKEN language
                                    (sent to Whisper: sessions, dictation, commands)
 
-`dictee` and `commande` are toggles, meant for a keyboard shortcut: the first
-invocation starts listening, the second stops, transcribes and acts. Whisper
+`dictee`, `commande` and `lire` are toggles, meant for a keyboard shortcut: the
+first invocation starts (listening, or reading), the second stops (or pauses). Whisper
 always detects the language -- there is no override, on purpose (see
 geshtu/engines.py).
 
@@ -262,6 +267,29 @@ def main(argv: list[str] | None = None) -> int:
         from geshtu import commandes
         commandes.bilan()
         return 0
+
+    if cmd == "lire":
+        # Same key-repeat guard as dictee: holding Super+Shift+V would otherwise
+        # pause/resume at the keyboard's repeat rate.
+        from geshtu import keyguard
+        if keyguard.repete("lire"):
+            return 0
+        if rest[:1] == ["--resume"]:
+            r = call({"cmd": "lire"})
+        elif rest:
+            r = call({"cmd": "lire", "texte": " ".join(rest)})
+        else:
+            r = call({"cmd": "lire", "selection": True})
+        if not r.get("ok"):
+            print(r.get("error", "failed"))
+            return 1
+        print("lecture : %s%s" % (r.get("etat"), (" -- " + r["titre"]) if r.get("titre") else ""))
+        return 0
+
+    if cmd == "lire-stop":
+        r = call({"cmd": "lire-stop"})
+        print(r.get("error") or "lecture arrêtée")
+        return 0 if r.get("ok") else 1
 
     if cmd == "reprocess":
         if not rest:

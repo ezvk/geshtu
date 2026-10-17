@@ -109,7 +109,15 @@ geshtu start node:163          # one application stream
 geshtu status
 geshtu stop --lang en
 geshtu start file:talk.mp4     # the same chain on an existing recording
+geshtu lire                    # read the selected text aloud (Kokoro); again = pause
+geshtu lire --resume           # read the latest summary aloud
 ```
+
+`geshtu lire` reads the Wayland primary selection -- whatever is highlighted in
+any window -- else the clipboard, guesses its language from function words and
+sends it to Kokoro passage by passage, so the first words come within seconds.
+Bound to a key, it is a toggle: press to read, press to pause, press to resume;
+a new selection replaces the reading.
 
 There is also a window (`geshtu-gui`) and a tray icon (`geshtu-tray`), both
 thin clients: neither holds any state, both ask the daemon every three

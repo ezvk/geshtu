@@ -661,7 +661,9 @@ class Handler(socketserver.StreamRequestHandler):
         if cmd == "set-cible":
             return st.set_langue_cible(msg.get("langue_cible", ""))
         if cmd == "lire":
-            return st.lecteur.bascule()
+            # No text: the latest summary. `selection`: the daemon reads the
+            # primary selection itself (it has the display, see lecture.py).
+            return st.lecteur.bascule(msg.get("texte"), bool(msg.get("selection")))
         if cmd == "lire-stop":
             return st.lecteur.stop()
         if cmd == "get-language":

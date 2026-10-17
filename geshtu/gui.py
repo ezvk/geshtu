@@ -131,6 +131,14 @@ class Window(Gtk.ApplicationWindow):
         self.lire.set_tooltip_text("Kokoro, sur le NPU -- lecture / pause / reprise")
         self.lire.connect("clicked", self.lire_bascule)
         lire.append(self.lire)
+        # ezvk, 2026-10-17 : « lire le texte sélectionné ». Same daemon command
+        # as Super+Shift+V; the daemon reads the primary selection itself.
+        self.lire_sel = Gtk.Button(label="🔊 Lire la sélection")
+        self.lire_sel.set_tooltip_text(
+            "Le texte sélectionné dans n'importe quelle fenêtre (sinon le presse-papier) "
+            "-- Super+Shift+V au clavier")
+        self.lire_sel.connect("clicked", self.lire_selection)
+        lire.append(self.lire_sel)
         self.lire_stop = Gtk.Button(icon_name="media-playback-stop-symbolic")
         self.lire_stop.set_tooltip_text("Arrêter la lecture")
         self.lire_stop.connect("clicked", self.lire_arret)
@@ -375,6 +383,12 @@ class Window(Gtk.ApplicationWindow):
             self.log(r.get("error", "lecture impossible"))
         self.tick()
 
+    def lire_selection(self, _button) -> None:
+        r = call({"cmd": "lire", "selection": True})
+        if not r.get("ok"):
+            self.log(r.get("error", "lecture impossible"))
+        self.tick()
+
     def lire_arret(self, _button) -> None:
         call({"cmd": "lire-stop"})
         self.tick()
@@ -483,6 +497,10 @@ class Window(Gtk.ApplicationWindow):
             "paused": "▶ Reprendre",
         }.get(etat, "▶ Lire le dernier résumé"))
         self.lire.set_sensitive(etat != "preparing")
+        self.lire_sel.set_sensitive(etat != "preparing")
+        if etat in ("playing", "paused") and lec.get("session") == "texte":
+            self.lire.set_label(("⏸ Pause" if etat == "playing" else "▶ Reprendre")
+                                + " — " + (lec.get("titre") or "")[:40])
         self.lire_stop.set_sensitive(etat in ("playing", "paused", "preparing"))
         buf = self.view.get_buffer()
         known = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
