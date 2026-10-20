@@ -105,7 +105,7 @@ def transcribe(engine, path: pathlib.Path, language: str | None = None) -> str:
         engine.endpoint, data=bytes(body),
         headers={"Content-Type": "multipart/form-data; boundary=" + boundary})
     with urllib.request.urlopen(req, timeout=engine.timeout) as resp:
-        return (json.loads(resp.read()).get("text") or "").strip()
+        return nettoie((json.loads(resp.read()).get("text") or "").strip())
 
 
 def chat(engine, prompt: str, system: str = "", max_tokens: int = 1100,
@@ -178,3 +178,52 @@ def speak(engine, text: str, voice: str, language: str) -> bytes:
         headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=engine.timeout) as resp:
         return resp.read()
+
+
+# -- Whisper's repetition loops -------------------------------------------
+#
+# ⚠️ ON NON-SPEECH WHISPER LOOPS, AND THE LOOP IS NOT SPEECH. Seen live on
+# 2026-10-20 (whisper-large-v3-turbo int8, a Teams call): keyboard typing over
+# 75 seconds came out as « ça tatatata ta ta ta ta ta … » a few hundred times;
+# silence or music gives « Oooooo… ». ezvk: « il retranscrit n'importe quoi ».
+# A word or group of up to four words repeated more than 3 times in a row is
+# kept once; a letter pattern repeated 4 times or more inside a word is
+# kept once; what is mostly loop is dropped. Applied to every transcription
+# (meeting, live view, dictation): an honest repetition is never 4+ in a row.
+
+_MOT = re.compile(r"[\w'’-]+", re.UNICODE)
+_RUN = re.compile(r"([^\W\d_]{1,3}?)\1{3,}", re.UNICODE)   # letters only: 1000000 stays
+
+
+def _cle(mot: str) -> str:
+    return "".join(_MOT.findall(mot.lower()))
+
+
+def nettoie(texte: str) -> str:
+    """Collapse Whisper repetition loops; '' when the text is mostly loop."""
+    if not texte:
+        return texte
+    mots = [_RUN.sub(r"\1", m) for m in texte.split()]
+    avant = len(mots)
+    sortie: list[str] = []
+    i = 0
+    while i < len(mots):
+        garde = False
+        for n in (1, 2, 3, 4):
+            motif = [_cle(m) for m in mots[i:i + n]]
+            if len(motif) < n or not all(motif):
+                continue
+            k = 1
+            while [_cle(m) for m in mots[i + k * n:i + (k + 1) * n]] == motif:
+                k += 1
+            if k > 3:                       # 4 occurrences or more: keep one
+                sortie.extend(mots[i:i + n])
+                i += k * n
+                garde = True
+                break
+        if not garde:
+            sortie.append(mots[i])
+            i += 1
+    if avant >= 12 and len(sortie) <= avant * 0.2 and len(sortie) <= 6:
+        return ""                           # the phrase WAS the loop
+    return " ".join(sortie)

@@ -120,7 +120,7 @@ class Direct:
         except Exception as exc:                       # noqa: BLE001
             self.state.report("live transcript: whisper failed: %s" % exc)
             return
-        if not texte or texte.lower() in FANTOMES or REPETITION.search(texte):
+        if len(texte) < 3 or texte.lower() in FANTOMES or REPETITION.search(texte):
             return
         with self.lock:
             if not arret.is_set():
