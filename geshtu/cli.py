@@ -12,7 +12,7 @@ USAGE = """geshtu — self-hosted meeting intelligence
   geshtu targets                   what can be recorded right now
   geshtu start <key> [<key>...]    start recording the given targets
   geshtu start file:<path>         run the same chain on an existing media file
-  geshtu stop                      stop, then transcribe and summarise
+  geshtu stop                      stop, then transcribe
   geshtu status                    what is recording or processing
   geshtu sessions                  past sessions
   geshtu reprocess <id>            run the pipeline again on a session

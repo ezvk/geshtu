@@ -122,7 +122,11 @@ language = "fr"
 # CHANGEMENTS DE VOIX. Transcrire d abord fige une grille de deux minutes dans
 # laquelle une interjection de trois secondes ne peut pas exister : mesure du
 # 2026-09-21, trois locuteurs trouves et une seule etiquette dans la note.
-stages = ["diarise", "transcribe", "chapter", "summarise"]
+# ⚠️ PLUS DE RÉSUMÉ PAR DÉFAUT. ezvk, 2026-10-20 : « on va retirer le summarize,
+# c'est juste une transcription d'un flux audio ». Les étapes restent installées :
+# les remettre ici (ou dans ~/.config/geshtu/geshtu.toml) les réactive --
+#   stages = ["diarise", "transcribe", "chapter", "summarise"]
+stages = ["transcribe"]
 sinks = ["markdown"]
 
 # Dropping a model in a folder and having it served. The server must be

@@ -76,6 +76,11 @@ class Window(Gtk.ApplicationWindow):
         src = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         src.append(Gtk.Label(label="Source", xalign=0))
         self.sources_menu = Gtk.DropDown(model=Gtk.StringList.new(["…"]), hexpand=True)
+        # Le choix de l'utilisateur, gardé à part du menu : reload() reconstruit
+        # le menu, il ne doit jamais le décider à sa place (voir reload()).
+        self.choix: dict | None = None
+        self.en_reload = False
+        self.sources_menu.connect("notify::selected", self.on_source_choisie)
         src.append(self.sources_menu)
         box.append(src)
 
@@ -120,7 +125,7 @@ class Window(Gtk.ApplicationWindow):
         actions.append(self.button)
         self.openfile = Gtk.Button(label="Open a recording…")
         self.openfile.set_tooltip_text(
-            "Transcribe and summarise a file that already exists")
+            "Transcribe a file that already exists")
         self.openfile.connect("clicked", self.open_file)
         actions.append(self.openfile)
         box.append(actions)
@@ -216,20 +221,53 @@ class Window(Gtk.ApplicationWindow):
         # decalage : ce n est pas qu un desagrement a l oreille, l ASR repete
         # ou bafouille sur les passages doubles. On ne peut plus cocher les
         # deux, donc le cas ne se presente plus.
-        self.rows = r.get("targets", [])
+        #
+        # ⚠️ ET LE MENU NE RETOMBE JAMAIS TOUT SEUL SUR LE MICRO. Il le faisait
+        # deux fois : à l'ouverture (ligne 0 = « My microphone ») et à chaque
+        # rafraîchissement où la source choisie avait disparu -- un flux
+        # d'application n'existe que pendant qu'il joue, une pause suffisait.
+        # ezvk, 2026-10-20 : micro en sourdine à cause de l'écho, « le mic est
+        # sélectionné par défaut dans geshtu et je ne peux pas le retirer des
+        # inputs ». Désormais : par défaut la sortie système ; une source choisie
+        # qui disparaît RESTE choisie, marquée absente ; le micro seulement si on
+        # le choisit.
+        self.rows = list(r.get("targets", []))
+        cle = self.choix["key"] if self.choix else None
+        if cle and not any(t["key"] == cle for t in self.rows):
+            self.rows.insert(0, dict(self.choix, absent=True))
         textes = []
         for t in self.rows:
-            if t["kind"] == "app":
+            if t.get("absent"):
+                textes.append(("⏸ %s — absent, attend qu'il rejoue" % t["label"])[:90])
+            elif t["kind"] == "app":
                 textes.append(("%s — %s" % (t["label"], t["detail"] or t["label"]))[:90])
             else:
                 textes.append(("%s — %s" % (t["label"], t["detail"]))[:90])
-        self.sources_menu.set_model(Gtk.StringList.new(
-            textes or ["rien ne joue — un flux n'existe que pendant qu'il joue"]))
-        for i, t in enumerate(self.rows):
-            if t["key"] == keep:
-                self.sources_menu.set_selected(i)
-                return
-        self.sources_menu.set_selected(0)
+        self.en_reload = True
+        try:
+            self.sources_menu.set_model(Gtk.StringList.new(
+                textes or ["rien ne joue — un flux n'existe que pendant qu'il joue"]))
+            voulu = cle or "default:output"
+            for i, t in enumerate(self.rows):
+                if t["key"] == voulu:
+                    self.sources_menu.set_selected(i)
+                    return
+            # Ni le choix ni la sortie système (liste vide ou démon muet) :
+            # la première ligne qui n'est PAS le micro, sinon rien.
+            for i, t in enumerate(self.rows):
+                if t["kind"] != "mic":
+                    self.sources_menu.set_selected(i)
+                    return
+            self.sources_menu.set_selected(Gtk.INVALID_LIST_POSITION)
+        finally:
+            self.en_reload = False
+
+    def on_source_choisie(self, _drop, _param) -> None:
+        if self.en_reload:
+            return
+        i = self.sources_menu.get_selected()
+        if 0 <= i < len(self.rows):
+            self.choix = {k: v for k, v in self.rows[i].items() if k != "absent"}
 
     def selected_key(self) -> str | None:
         if not self.rows:
@@ -451,7 +489,7 @@ class Window(Gtk.ApplicationWindow):
         if self.recording:
             self.state.set_text("recording %s   %s"
                                 % (r["recording"], hms(r.get("duration", 0))))
-            self.button.set_label("Stop and summarise")
+            self.button.set_label("Stop and transcribe")
             self.button.remove_css_class("suggested-action")
             self.button.add_css_class("destructive-action")
         elif self.courte:
