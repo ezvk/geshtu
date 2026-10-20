@@ -97,8 +97,8 @@ class Window(Gtk.ApplicationWindow):
         self.locuteurs.set_tooltip_text("how many people speak -- 0 = the config's value")
         qui.append(self.locuteurs)
         # Les noms : « 1=Régis, 2=Jocelyn, 3=PM ». Pendant l'enregistrement ils
-        # s'affichent tout de suite dans le direct et vont dans la note ; après,
-        # ils réécrivent la note du dernier enregistrement.
+        # ne nomment QUE le direct (sa numérotation n'est pas celle de la note) ;
+        # après, ils réécrivent la note du dernier enregistrement, d'après elle.
         self.noms = Gtk.Entry(hexpand=True)
         self.noms.set_placeholder_text("noms : 1=Régis, 2=Jocelyn, 3=PM")
         self.noms.connect("activate", self.on_noms)
@@ -306,8 +306,9 @@ class Window(Gtk.ApplicationWindow):
             self.log("noms : écrire par exemple 1=Régis, 2=Jocelyn, 3=PM")
             return
         r = call({"cmd": "noms", "noms": noms})
-        self.log(r.get("error") or ("noms : %s" % ", ".join(
-            "%s = %s" % kv for kv in sorted(r.get("noms", {}).items()))))
+        self.log(r.get("error") or ("noms%s : %s" % (
+            " (direct seulement -- renommer la note une fois écrite)" if r.get("direct") else "",
+            ", ".join("%s = %s" % kv for kv in sorted(r.get("noms", {}).items())))))
 
     def selected_key(self) -> str | None:
         if not self.rows:

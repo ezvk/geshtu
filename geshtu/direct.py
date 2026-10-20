@@ -59,6 +59,8 @@ class Direct:
         self.etat = "idle"
         self.phrases: list[dict] = []      # {debut, fin, texte, qui}
         self.session = None
+        # Names typed DURING the recording: the live view only (see noms()).
+        self.noms: dict = {}
 
     def status(self) -> dict:
         with self.lock:
@@ -71,10 +73,14 @@ class Direct:
             self.arret.set()               # a previous transcript, if any, ends
             self.arret = threading.Event()
             self.etat = "running"
-            self.phrases, self.session = [], session
+            self.phrases, self.session, self.noms = [], session, {}
         arret = self.arret
         threading.Thread(target=self._ecoute, args=(session, wav, arret), daemon=True).start()
         threading.Thread(target=self._diarise, args=(session, wav, arret), daemon=True).start()
+
+    def nommer(self, noms: dict) -> None:
+        with self.lock:
+            self.noms = dict(noms)
 
     def stop(self) -> None:
         """Stops listening; the blocks stay on screen until the next start."""
@@ -85,7 +91,7 @@ class Direct:
     # ------------------------------------------------------------------
     def _blocs(self) -> list[dict]:
         """Consecutive phrases of one speaker, one block. Caller holds the lock."""
-        nom = self.session.nom if self.session is not None else (lambda q: q)
+        nom = lambda q: self.noms.get(q, q)
         blocs: list[dict] = []
         for ph in self.phrases:
             qui = nom(ph["qui"]) if ph["qui"] else "…"

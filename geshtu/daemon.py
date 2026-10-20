@@ -580,20 +580,29 @@ class State:
     def noms(self, noms: dict) -> dict:
         """Names for the speaker labels, e.g. {"Speaker 1": "Régis"}.
 
-        During a recording they show at once in the live view and go into the
-        final note. After it, they rewrite the note of the last recording --
-        the labels are kept, so this can be run again with other names.
-        ezvk, 2026-10-20: « PM, Jocelyn et Régis »."""
+        ⚠️ DURING A RECORDING THEY ONLY NAME THE LIVE VIEW. The live numbering
+        is recomputed every minute on the audio so far; the final note clusters
+        the whole recording, and its « Speaker 2 » need not be the live one.
+        Names typed from the live view would land on the wrong lines of the
+        note. ezvk, 2026-10-20: « oui que pour le direct ». So: live view only
+        while recording; after it, they rename the note of the last recording
+        (the labels are kept, so this can be run again).
+        """
         propres = {str(k): str(v).strip() for k, v in noms.items() if str(v).strip()}
         with self.lock:
+            en_cours = self.session is not None
             session = self.session or self.derniere
-            if session is None:
-                return {"ok": False, "error": "no recording to name the speakers of"}
-            session.noms = propres
-            en_cours = session is self.session
-            occupe = self.busy == session.id
+            occupe = session is not None and self.busy == session.id
+        if en_cours:
+            self.direct.nommer(propres)
+            return {"ok": True, "session": session.id, "noms": propres, "direct": True}
+        if session is None:
+            return {"ok": False, "error": "no recording to name the speakers of"}
+        if occupe:
+            return {"ok": False, "error": "the note is still being written -- name it when it is done"}
+        session.noms = propres
         session.save()
-        if not en_cours and not occupe and session.segments:
+        if session.segments:
             pipeline.deliver(session, self.active(), self.report)
             self.report("names applied, note rewritten: %s" % ", ".join(
                 "%s = %s" % kv for kv in sorted(propres.items())))
