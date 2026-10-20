@@ -4,6 +4,8 @@ from __future__ import annotations
 from geshtu import audio
 from geshtu import engines
 from geshtu.models import Segment
+# Whisper s known inventions on near-silence, shared with the live views.
+from geshtu.traduction import FANTOMES
 
 TARGET = 120.0          # seconds aimed at per slice
 
@@ -33,7 +35,12 @@ class Transcribe:
             piece = audio.slice_out(session.mixed, work / ("%03d.wav" % i),
                                     start, end, cfg.rate)
             text = engines.transcribe(engine, piece, session.langue_entree or None)
-            if not text:
+            # ⚠️ A SLICE THAT SAYS ONLY « Merci. » IS SILENCE. Seen on the
+            # 2026-10-20 meeting note: dozens of lone « Merci. » on the quiet
+            # gaps, the known Whisper invention the live views already drop.
+            # Only a WHOLE slice equal to one is dropped -- a real « merci »
+            # inside speech stays.
+            if not text or text.strip().lower() in FANTOMES:
                 continue
             seg = Segment(start=start, end=end, text=text)
             seg.speaker = _qui(session.turns, start, end)
