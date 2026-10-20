@@ -123,10 +123,11 @@ language = "fr"
 # laquelle une interjection de trois secondes ne peut pas exister : mesure du
 # 2026-09-21, trois locuteurs trouves et une seule etiquette dans la note.
 # ⚠️ PLUS DE RÉSUMÉ PAR DÉFAUT. ezvk, 2026-10-20 : « on va retirer le summarize,
-# c'est juste une transcription d'un flux audio ». Les étapes restent installées :
+# c'est juste une transcription d'un flux audio » ; puis « garde la diarisation ».
+# Chapitrage et résumé restent installés :
 # les remettre ici (ou dans ~/.config/geshtu/geshtu.toml) les réactive --
 #   stages = ["diarise", "transcribe", "chapter", "summarise"]
-stages = ["transcribe"]
+stages = ["diarise", "transcribe"]
 sinks = ["markdown"]
 
 # Dropping a model in a folder and having it served. The server must be
