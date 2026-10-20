@@ -49,6 +49,62 @@ FANTOMES = {"merci.", "thank you.", "thanks for watching!", "sous-titrage st' 50
             "sous-titres réalisés par la communauté d'amara.org", "you", "."}
 
 
+def ecoute(wav: pathlib.Path, arret: threading.Event, seuil, rappel) -> None:
+    """Read a capture file WHILE IT GROWS and hand each phrase to `rappel`.
+
+    A phrase ends on PAUSE seconds below the voice threshold, once it holds at
+    least MIN_VOIX of speech, or after MAX_PHRASE anyway; shorter bursts (a
+    cough, a click) are dropped. `seuil` is a callable: the live translation
+    raises it while it ducks the source (see _baisser()). Shared with the live
+    transcript of a recording (direct.py), which must cut exactly the same way.
+    `rappel(pcm, debut, fin)`: the phrase and where it sits in the capture, in
+    seconds -- the live transcript needs it to match phrases with speaker turns.
+    """
+    debut = None
+    while debut is None and not arret.is_set():
+        try:
+            tete = wav.read_bytes()[:4096]
+            i = tete.find(b"data")
+            if i >= 0:
+                debut = i + 8
+        except OSError:
+            pass
+        time.sleep(0.2)
+    pos, phrase, voix, pause = debut or 0, bytearray(), 0.0, 0.0
+    origine, t_phrase = debut or 0, 0.0
+    while not arret.is_set():
+        try:
+            with wav.open("rb") as f:
+                f.seek(pos)
+                neuf = f.read()
+        except OSError:
+            break
+        neuf = neuf[: len(neuf) - len(neuf) % (TRAME * 2)]
+        avant = pos
+        pos += len(neuf)
+        for k in range(0, len(neuf), TRAME * 2):
+            trame = neuf[k:k + TRAME * 2]
+            n = len(trame) // 2
+            ech = struct.unpack("<%dh" % n, trame)
+            rms = (sum(x * x for x in ech) / n) ** 0.5
+            if rms >= seuil():
+                if not phrase:
+                    t_phrase = (avant + k - origine) / 2 / RATE
+                voix += TRAME / RATE
+                pause = 0.0
+                phrase += trame
+            elif phrase:
+                pause += TRAME / RATE
+                phrase += trame
+            duree = len(phrase) / 2 / RATE
+            if phrase and ((pause >= PAUSE and voix >= MIN_VOIX) or duree >= MAX_PHRASE):
+                rappel(bytes(phrase), t_phrase, t_phrase + len(phrase) / 2 / RATE)
+                phrase, voix, pause = bytearray(), 0.0, 0.0
+            elif phrase and pause >= PAUSE:           # a cough, a click: drop it
+                phrase, voix, pause = bytearray(), 0.0, 0.0
+        time.sleep(0.15)
+
+
 class Traducteur:
     """One live translation at a time. States: idle, running."""
 
@@ -152,45 +208,8 @@ class Traducteur:
 
     # -- the capture, read while it grows ---------------------------------
     def _ecoute(self, wav: pathlib.Path, entree: str, cible: str) -> None:
-        debut = None
-        while debut is None and not self.arret.is_set():
-            try:
-                tete = wav.read_bytes()[:4096]
-                i = tete.find(b"data")
-                if i >= 0:
-                    debut = i + 8
-            except OSError:
-                pass
-            time.sleep(0.2)
-        pos, phrase, voix, pause = debut or 0, bytearray(), 0.0, 0.0
-        while not self.arret.is_set():
-            try:
-                with wav.open("rb") as f:
-                    f.seek(pos)
-                    neuf = f.read()
-            except OSError:
-                break
-            neuf = neuf[: len(neuf) - len(neuf) % (TRAME * 2)]
-            pos += len(neuf)
-            for k in range(0, len(neuf), TRAME * 2):
-                trame = neuf[k:k + TRAME * 2]
-                n = len(trame) // 2
-                ech = struct.unpack("<%dh" % n, trame)
-                rms = (sum(x * x for x in ech) / n) ** 0.5
-                if rms >= self.seuil:
-                    voix += TRAME / RATE
-                    pause = 0.0
-                    phrase += trame
-                elif phrase:
-                    pause += TRAME / RATE
-                    phrase += trame
-                duree = len(phrase) / 2 / RATE
-                if phrase and ((pause >= PAUSE and voix >= MIN_VOIX) or duree >= MAX_PHRASE):
-                    self._phrase(bytes(phrase), entree, cible)
-                    phrase, voix, pause = bytearray(), 0.0, 0.0
-                elif phrase and pause >= PAUSE:           # a cough, a click: drop it
-                    phrase, voix, pause = bytearray(), 0.0, 0.0
-            time.sleep(0.15)
+        ecoute(wav, self.arret, lambda: self.seuil,
+               lambda pcm, *_: self._phrase(pcm, entree, cible))
 
     def _phrase(self, pcm: bytes, entree: str, cible: str) -> None:
         cfg = self.state.cfg

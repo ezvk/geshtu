@@ -86,6 +86,17 @@ class Session:
     chapters: list[Chapter] = dataclasses.field(default_factory=list)
     summary: str = ""
     title: str = ""
+    # How many people speak, when it is known -- set per recording from the
+    # window, it wins over [diarisation] speakers. ezvk, 2026-10-20: « on était
+    # 3 locuteurs » on a meeting the fixed `speakers = 4` had split in four.
+    locuteurs: int | None = None
+    # Display names for the diarisation labels, e.g. {"Speaker 1": "Régis"}.
+    # The labels themselves are never rewritten, so the names can be changed
+    # again later; only what is shown (the note, the live view) uses them.
+    noms: dict = dataclasses.field(default_factory=dict)
+
+    def nom(self, speaker: str | None) -> str | None:
+        return self.noms.get(speaker, speaker) if speaker else speaker
 
     @property
     def duration(self) -> float:
@@ -151,4 +162,6 @@ def from_dict(cls, raw: dict, root: pathlib.Path) -> Session:
     s.turns = [Turn(**x) for x in raw.get("turns", [])]
     s.segments = [Segment(**x) for x in raw.get("segments", [])]
     s.chapters = [Chapter(**x) for x in raw.get("chapters", [])]
+    s.locuteurs = raw.get("locuteurs")
+    s.noms = raw.get("noms") or {}
     return s

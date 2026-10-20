@@ -51,7 +51,7 @@ class MarkdownSink:
         if a_resume:
             lines += ["Résumé : [%s](%s)" % (resume.name, resume.name), ""]
         for s in session.segments:
-            qui = ("**%s** " % s.speaker) if s.speaker else ""
+            qui = ("**%s** " % session.nom(s.speaker)) if s.speaker else ""
             lines.append("%s`%s` %s" % (qui, _hms(s.start), s.text))
             lines.append("")
         transcription.write_text("\n".join(lines), encoding="utf-8")

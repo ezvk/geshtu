@@ -39,6 +39,13 @@ def process(session: "Session", cfg: "Config", report=print) -> bool:
             return False
         session.save()
 
+    deliver(session, cfg, report)
+    return True
+
+
+def deliver(session: "Session", cfg: "Config", report=print) -> None:
+    """The sinks alone -- also used to rewrite the note after the speakers
+    were given names (daemon `noms`)."""
     outputs = plugins.sinks()
     for name in cfg.sinks:
         sink = outputs.get(name)
@@ -53,4 +60,3 @@ def process(session: "Session", cfg: "Config", report=print) -> bool:
             # look lost.
             report("sink %s failed: %s" % (name, traceback.format_exc(limit=1)))
     session.save()
-    return True

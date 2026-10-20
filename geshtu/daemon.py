@@ -36,6 +36,7 @@ from geshtu import config
 from geshtu import engines
 from geshtu import lecture
 from geshtu import traduction
+from geshtu import direct
 from geshtu import models
 from geshtu import pipeline
 from geshtu import plugins
@@ -72,6 +73,8 @@ class State:
         self.prefs = self._load_prefs()
         self.lecteur = lecture.Lecteur(self)
         self.traducteur = traduction.Traducteur(self)
+        self.direct = direct.Direct(self)
+        self.derniere = None          # the last recording stopped, for `noms`
         threading.Thread(target=self._worker, daemon=True).start()
 
     # -- model choice ---------------------------------------------------
@@ -482,7 +485,8 @@ class State:
                             "kind": t.kind, "detail": t.detail})
         return out
 
-    def start(self, keys: list[str], language: str, entree: str | None = None) -> dict:
+    def start(self, keys: list[str], language: str, entree: str | None = None,
+              locuteurs: int | None = None) -> dict:
         # One capture at a time: both use the same capture sink. Asked BEFORE our
         # lock (see status()).
         if self.traducteur.status()["etat"] != "idle":
@@ -494,7 +498,8 @@ class State:
             root = self.cfg.sessions / time.strftime("%Y-%m-%d_%H-%M")
             root.mkdir(parents=True, exist_ok=True)
             session = models.Session(id=root.name, root=root, language=language,
-                                     langue_entree=entree or self.langue_entree())
+                                     langue_entree=entree or self.langue_entree(),
+                                     locuteurs=locuteurs or None)
             # ⚠️ A KEY MAY NAME ITS OWN SOURCE, and this is the extension
             # point rather than a special case for files.
             #
@@ -537,6 +542,11 @@ class State:
                 return {"ok": False, "error": str(exc)}
             self.session = session
             self.report("recording %s: %s" % (session.id, ", ".join(keys)))
+            # Live transcript, in blocks per speaker (direct.py), on the first
+            # track -- the one the window picked. A preview: the final pass
+            # still diarises and transcribes the whole recording.
+            if session.tracks and session.tracks[0].segments:
+                self.direct.start(session, session.tracks[0].segments[0])
             return {"ok": True, "session": session.id}
 
     def stop(self) -> dict:
@@ -548,6 +558,8 @@ class State:
             self.source_for(session).stop(session)
             session.ended = time.time()
             self.session = None
+            self.derniere = session
+        self.direct.stop()
 
         from geshtu import audio
         for track in session.tracks:
@@ -565,11 +577,34 @@ class State:
         self.jobs.put(session)
         return {"ok": True, "session": session.id, "queued": True}
 
+    def noms(self, noms: dict) -> dict:
+        """Names for the speaker labels, e.g. {"Speaker 1": "Régis"}.
+
+        During a recording they show at once in the live view and go into the
+        final note. After it, they rewrite the note of the last recording --
+        the labels are kept, so this can be run again with other names.
+        ezvk, 2026-10-20: « PM, Jocelyn et Régis »."""
+        propres = {str(k): str(v).strip() for k, v in noms.items() if str(v).strip()}
+        with self.lock:
+            session = self.session or self.derniere
+            if session is None:
+                return {"ok": False, "error": "no recording to name the speakers of"}
+            session.noms = propres
+            en_cours = session is self.session
+            occupe = self.busy == session.id
+        session.save()
+        if not en_cours and not occupe and session.segments:
+            pipeline.deliver(session, self.active(), self.report)
+            self.report("names applied, note rewritten: %s" % ", ".join(
+                "%s = %s" % kv for kv in sorted(propres.items())))
+        return {"ok": True, "session": session.id, "noms": propres}
+
     def status(self) -> dict:
         # ⚠️ READ THE HELPERS' STATE BEFORE TAKING OUR LOCK. They report() (our
         # lock) while holding theirs; asking them while holding ours deadlocked
         # the daemon on 2026-09-28. Never take another lock while holding one.
         lecture, traduction_ = self.lecteur.status(), self.traducteur.status()
+        direct_ = self.direct.status()
         with self.lock:
             s = self.session
             return {
@@ -586,6 +621,8 @@ class State:
                 "log": self.log[-12:],
                 "lecture": lecture,
                 "traduction": traduction_,
+                "direct": direct_,
+                "locuteurs_defaut": self.cfg.raw.get("diarisation", {}).get("speakers"),
             }
 
     def sessions(self) -> list[dict]:
@@ -641,7 +678,9 @@ class Handler(socketserver.StreamRequestHandler):
         if cmd == "start":
             return st.start(msg.get("targets") or [],
                             msg.get("language") or st.language(),
-                            msg.get("entree"))
+                            msg.get("entree"), msg.get("locuteurs"))
+        if cmd == "noms":
+            return st.noms(msg.get("noms") or {})
         if cmd == "get-entree":
             return {"ok": True, "langue_entree": st.langue_entree()}
         if cmd == "set-entree":

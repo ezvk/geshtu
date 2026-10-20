@@ -84,6 +84,30 @@ class Window(Gtk.ApplicationWindow):
         src.append(self.sources_menu)
         box.append(src)
 
+        # ---- qui parle -------------------------------------------------
+        # ⚠️ LE NOMBRE DE LOCUTEURS, PAR RÉUNION. ezvk, 2026-10-20 : « on était
+        # 3 locuteurs » sur une réunion que `speakers = 4` (fixé dans la
+        # config) avait coupée en quatre ; sans nombre du tout, le seuil seul en
+        # trouvait 11. 0 = celui de la config.
+        qui = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        qui.append(Gtk.Label(label="Locuteurs", xalign=0))
+        defaut = int(call({"cmd": "status"}).get("locuteurs_defaut") or 0)
+        self.locuteurs = Gtk.SpinButton.new_with_range(0, 12, 1)
+        self.locuteurs.set_value(defaut)
+        self.locuteurs.set_tooltip_text("how many people speak -- 0 = the config's value")
+        qui.append(self.locuteurs)
+        # Les noms : « 1=Régis, 2=Jocelyn, 3=PM ». Pendant l'enregistrement ils
+        # s'affichent tout de suite dans le direct et vont dans la note ; après,
+        # ils réécrivent la note du dernier enregistrement.
+        self.noms = Gtk.Entry(hexpand=True)
+        self.noms.set_placeholder_text("noms : 1=Régis, 2=Jocelyn, 3=PM")
+        self.noms.connect("activate", self.on_noms)
+        qui.append(self.noms)
+        nommer = Gtk.Button(label="Nommer")
+        nommer.connect("clicked", self.on_noms)
+        qui.append(nommer)
+        box.append(qui)
+
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         # The SPOKEN language, separate from the summary's -- Whisper on OVMS
         # does not detect it per request (engines.transcribe()).
@@ -269,6 +293,22 @@ class Window(Gtk.ApplicationWindow):
         if 0 <= i < len(self.rows):
             self.choix = {k: v for k, v in self.rows[i].items() if k != "absent"}
 
+    def on_noms(self, *_args) -> None:
+        noms = {}
+        for morceau in self.noms.get_text().split(","):
+            if "=" not in morceau:
+                continue
+            num, nom = morceau.split("=", 1)
+            num = num.strip().lower().removeprefix("speaker").strip()
+            if num.isdigit() and nom.strip():
+                noms["Speaker %d" % int(num)] = nom.strip()
+        if not noms:
+            self.log("noms : écrire par exemple 1=Régis, 2=Jocelyn, 3=PM")
+            return
+        r = call({"cmd": "noms", "noms": noms})
+        self.log(r.get("error") or ("noms : %s" % ", ".join(
+            "%s = %s" % kv for kv in sorted(r.get("noms", {}).items()))))
+
     def selected_key(self) -> str | None:
         if not self.rows:
             return None
@@ -352,7 +392,8 @@ class Window(Gtk.ApplicationWindow):
             self.log("pick a source")
             return
         r = call({"cmd": "start", "targets": [key],
-                  "language": self.lang_code()})
+                  "language": self.lang_code(),
+                  "locuteurs": int(self.locuteurs.get_value()) or None})
         self.log(r.get("error") or ("recording %s" % r.get("session")))
         self.tick()
 
@@ -515,8 +556,26 @@ class Window(Gtk.ApplicationWindow):
         self.traduire.set_label("⏹ Arrêter la traduction" if self.traduction_active
                                 else "🌐 Traduire en direct")
         self.traduire.set_sensitive(not self.recording and not self.busy)
+        # ⚠️ LA TRANSCRIPTION EN DIRECT D'UN ENREGISTREMENT, en blocs par
+        # locuteur (direct.py). ezvk : « je souhaite voir la transcription en
+        # temps réel dans la fenêtre », « on tranche par locuteur ». Elle prend
+        # la zone des sous-titres pendant l'enregistrement et y reste ensuite,
+        # jusqu'à une traduction ou un nouvel enregistrement.
+        blocs = (r.get("direct") or {}).get("blocs") or []
+        if blocs and not self.traduction_active:
+            signe = (len(blocs), len(blocs[-1]["texte"]))
+            if signe != getattr(self, "vu_direct", None):
+                buf = self.sous_titres.get_buffer()
+                buf.set_text("\n\n".join(
+                    "%s — %s\n%s" % (b["qui"], b["debut"], b["texte"]) for b in blocs))
+                self.sous_titres.scroll_to_mark(
+                    buf.create_mark(None, buf.get_end_iter(), False), 0, False, 0, 0)
+                self.vu_direct = signe
+                self.vu = -1          # la traduction redessinera quand elle reprendra la zone
         lignes = tr.get("lignes") or []
-        if len(lignes) != self.vu or (lignes and not self.traduction_active and self.vu == 0):
+        if blocs and not self.traduction_active:
+            pass
+        elif len(lignes) != self.vu or (lignes and not self.traduction_active and self.vu == 0):
             buf = self.sous_titres.get_buffer()
             # ⚠️ LA TRADUCTION SEULE. ezvk : « il met les deux langues dans le
             # transcript ». L'original ne revient que si la traduction a échoué,
