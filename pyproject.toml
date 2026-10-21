@@ -45,6 +45,7 @@ summarise = "geshtu.builtin.summary:Summarise"
 
 [project.entry-points."geshtu.sinks"]
 markdown = "geshtu.builtin.markdown:MarkdownSink"
+mp3 = "geshtu.builtin.mp3:Mp3Sink"
 
 [build-system]
 requires = ["setuptools>=68"]

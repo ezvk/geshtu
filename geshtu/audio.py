@@ -106,6 +106,14 @@ def ensure_mixed(session, cfg, report) -> bool:
     if session.mixed and session.mixed.exists():
         return True
     session.mixed = session.root / "mixed.wav"
+    # A session whose WAV were cleared once its note was written (mp3 sink):
+    # the kept MP3 IS the mix, decoded back for a reprocess.
+    if not any(p.exists() for t in session.tracks for p in t.segments) \
+            and session.audio and session.audio.exists():
+        subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                        "-i", str(session.audio), "-ac", "1", "-ar", str(cfg.rate),
+                        str(session.mixed)], check=True)
+        return True
     # ⚠️ EVERY track, taken from the session itself rather than from a
     # hardcoded list of kinds. Such a list went stale once and silently
     # dropped a whole track at mix time while its per-segment level was

@@ -25,16 +25,8 @@ class MarkdownSink:
         if not session.segments:
             report("nothing was transcribed -- no note written")
             return
-        out = pathlib.Path(
-            cfg.raw.get("markdown", {}).get("folder")
-            or (pathlib.Path.home() / "Documents" / "geshtu")).expanduser()
+        out, base = emplacement(session, cfg)
         out.mkdir(parents=True, exist_ok=True)
-        day = time.strftime("%Y-%m-%d", time.localtime(session.started))
-        # The session id already begins with the date; repeating it gives
-        # names like 2026-09-21-2026-09-21-11-12.md.
-        name = session.title or session.id.removeprefix(day).strip("_-") or "session"
-        slug = re.sub(r"[^A-Za-z0-9]+", "-", name)[:60].strip("-").lower()
-        base = "%s-%s" % (day, slug or "session")
         resume = out / (base + "-resume.md")
         transcription = out / (base + "-transcription.md")
         titre = session.title or session.id
@@ -50,6 +42,7 @@ class MarkdownSink:
         # Link only to a note that exists: no summary, no dangling link.
         if a_resume:
             lines += ["Résumé : [%s](%s)" % (resume.name, resume.name), ""]
+        lines += _lien_audio(session, out)
         for s in session.segments:
             qui = ("**%s** " % session.nom(s.speaker)) if s.speaker else ""
             lines.append("%s`%s` %s" % (qui, _hms(s.start), s.text))
@@ -64,13 +57,34 @@ class MarkdownSink:
         lines = _entete(session) + [
             "# %s" % titre, "",
             "Transcription complète : [%s](%s)" % (transcription.name, transcription.name), "",
-        ]
+        ] + _lien_audio(session, out)
         if session.summary:
             lines += [session.summary, ""]
         for c in chapitres:
             lines += ["## %s  *(%s)*" % (c.title, _hms(c.start)), "", c.body, ""]
         resume.write_text("\n".join(lines), encoding="utf-8")
         report("written %s" % resume)
+
+
+def emplacement(session, cfg) -> tuple[pathlib.Path, str]:
+    """The notes folder and the dated base name of this session's files --
+    shared with the mp3 sink, so the audio sits beside its note."""
+    out = pathlib.Path(
+        cfg.raw.get("markdown", {}).get("folder")
+        or (pathlib.Path.home() / "Documents" / "geshtu")).expanduser()
+    day = time.strftime("%Y-%m-%d", time.localtime(session.started))
+    # The session id already begins with the date; repeating it gives
+    # names like 2026-09-21-2026-09-21-11-12.md.
+    name = session.title or session.id.removeprefix(day).strip("_-") or "session"
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", name)[:60].strip("-").lower()
+    return out, "%s-%s" % (day, slug or "session")
+
+
+def _lien_audio(session, out: pathlib.Path) -> list[str]:
+    # Link only to a file that exists, and only when it sits beside the note.
+    if session.audio and session.audio.exists() and session.audio.parent == out:
+        return ["Audio : [%s](%s)" % (session.audio.name, session.audio.name), ""]
+    return []
 
 
 def _entete(session) -> list[str]:

@@ -128,7 +128,10 @@ language = "fr"
 # les remettre ici (ou dans ~/.config/geshtu/geshtu.toml) les réactive --
 #   stages = ["diarise", "transcribe", "chapter", "summarise"]
 stages = ["diarise", "transcribe"]
-sinks = ["markdown"]
+# `mp3` AVANT `markdown` : l'enregistrement gardé en MP3 à côté de la note, puis
+# les WAV effacés (ezvk, 2026-10-21 : « 1 en mp3 fais le menage »). La note
+# ne lie l'audio que s'il existe déjà.
+sinks = ["mp3", "markdown"]
 
 # Dropping a model in a folder and having it served. The server must be
 # started with --config_path <config> --file_system_poll_wait_seconds N,

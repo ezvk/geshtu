@@ -81,6 +81,9 @@ class Session:
     ended: float | None = None
     tracks: list[Track] = dataclasses.field(default_factory=list)
     mixed: pathlib.Path | None = None
+    # The MP3 kept beside the note once it is written (builtin/mp3.py). From
+    # then on it is THE audio of the session: the WAV are gone.
+    audio: pathlib.Path | None = None
     turns: list[Turn] = dataclasses.field(default_factory=list)
     segments: list[Segment] = dataclasses.field(default_factory=list)
     chapters: list[Chapter] = dataclasses.field(default_factory=list)
@@ -100,8 +103,14 @@ class Session:
 
     @property
     def duration(self) -> float:
-        """Longest track, never the sum. See the warning on Track."""
-        return max((seg_total(t) for t in self.tracks), default=0.0)
+        """Longest track, never the sum. See the warning on Track.
+
+        Once the WAV are deleted, the kept MP3 holds the mix: its length."""
+        longest = max((seg_total(t) for t in self.tracks), default=0.0)
+        if not longest and self.audio and self.audio.exists():
+            from geshtu import audio
+            return audio.duration(self.audio)
+        return longest
 
     # -- persistence ----------------------------------------------------
     #
@@ -156,6 +165,7 @@ def from_dict(cls, raw: dict, root: pathlib.Path) -> Session:
     s.title = raw.get("title", "")
     s.summary = raw.get("summary", "")
     s.mixed = pathlib.Path(raw["mixed"]) if raw.get("mixed") else None
+    s.audio = pathlib.Path(raw["audio"]) if raw.get("audio") else None
     s.tracks = [Track(kind=t["kind"], source=t["source"],
                       segments=[pathlib.Path(p) for p in t["segments"]],
                       level_db=t.get("level_db")) for t in raw.get("tracks", [])]
