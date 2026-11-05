@@ -295,12 +295,12 @@ class State:
     # -- the queue ------------------------------------------------------
     def _worker(self) -> None:
         while True:
-            session = self.jobs.get()
+            session, etapes = self.jobs.get()
             with self.lock:
                 self.busy = session.id
             try:
                 self._verifier_modeles()
-                pipeline.process(session, self.active(), self.report)
+                pipeline.process(session, self.active(), self.report, etapes)
             except Exception:                            # noqa: BLE001
                 self.report(traceback.format_exc())
             finally:
@@ -574,7 +574,7 @@ class State:
                     self.report("track %s (%s): %.1f dB"
                                 % (track.kind, track.source, track.level_db))
         session.save()
-        self.jobs.put(session)
+        self.jobs.put((session, None))
         return {"ok": True, "session": session.id, "queued": True}
 
     def noms(self, noms: dict) -> dict:
@@ -654,8 +654,51 @@ class State:
         # A session recorded before the spoken language existed gets today's.
         if not s.langue_entree:
             s.langue_entree = self.langue_entree()
-        self.jobs.put(s)
+        self.jobs.put((s, None))
         return {"ok": True, "queued": True}
+
+    # ⚠️ LE RÉSUMÉ À LA DEMANDE, PAS À CHAQUE RÉUNION. Il est retiré des étapes
+    # par défaut depuis le 2026-10-20 (config.py, [pipeline]) ; ezvk, 2026-11-05 :
+    # « ajouter un bouton résumer la session ». Seuls chapitrage et résumé
+    # tournent, sur la transcription déjà faite -- pas de nouvelle
+    # transcription -- puis les sorties, qui réécrivent la note avec le résumé.
+    RESUME = ["chapter", "summarise"]
+
+    def resumer(self, sid: str | None = None, language: str | None = None) -> dict:
+        # ⚠️ REFUSÉ PENDANT UN TRAITEMENT. La séance qui se transcrit n'a pas
+        # encore de tranches : « la dernière transcrite » serait alors la
+        # PRÉCÉDENTE, et on résumerait la mauvaise réunion sans le dire.
+        with self.lock:
+            occupe = self.busy or not self.jobs.empty()
+        if occupe:
+            return {"ok": False, "error": "un traitement est en cours -- résumer après"}
+        if sid:
+            root = self.cfg.sessions / sid
+            if not (root / "session.json").is_file():
+                return {"ok": False, "error": "no such session"}
+        else:
+            root = self._derniere_transcrite()
+            if root is None:
+                return {"ok": False, "error": "aucune séance transcrite à résumer"}
+        s = models.Session.load(root)
+        if not s.segments:
+            return {"ok": False, "error": "%s n'a pas de transcription" % s.id}
+        if language:
+            s.language = language
+        self.jobs.put((s, self.RESUME))
+        return {"ok": True, "session": s.id, "queued": True}
+
+    def _derniere_transcrite(self) -> "pathlib.Path | None":
+        """The newest session that has a transcript. The ids are dated
+        (2026-11-05_13-47), so their order is the order of the recordings; a
+        recording that came out silent has no segments and is passed over."""
+        if not self.cfg.sessions.is_dir():
+            return None
+        for d in sorted(self.cfg.sessions.iterdir(), reverse=True):
+            f = d / "session.json"
+            if f.is_file() and json.loads(f.read_text()).get("segments"):
+                return d
+        return None
 
 
 class Handler(socketserver.StreamRequestHandler):
@@ -728,6 +771,8 @@ class Handler(socketserver.StreamRequestHandler):
             return {"ok": True, "sessions": st.sessions()}
         if cmd == "reprocess":
             return st.reprocess(msg["session"])
+        if cmd == "resumer":
+            return st.resumer(msg.get("session"), msg.get("language"))
         if cmd == "models":
             return st.list_models()
         if cmd == "set-model":

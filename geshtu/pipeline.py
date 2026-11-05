@@ -16,8 +16,10 @@ if typing.TYPE_CHECKING:
     from geshtu.models import Session
 
 
-def process(session: "Session", cfg: "Config", report=print) -> bool:
-    """Run every configured stage, then every sink. Returns False on failure.
+def process(session: "Session", cfg: "Config", report=print,
+            stages: "list[str] | None" = None) -> bool:
+    """Run every configured stage (or only `stages`), then every sink.
+    Returns False on failure.
 
     ⚠️ THE SESSION IS SAVED AFTER EACH STAGE. A crash in summarisation must
     never cost the transcription that preceded it: audio is the only thing in
@@ -25,7 +27,7 @@ def process(session: "Session", cfg: "Config", report=print) -> bool:
     takes real time.
     """
     available = plugins.stages()
-    for name in cfg.stages:
+    for name in (cfg.stages if stages is None else stages):
         stage = available.get(name)
         if stage is None:
             report("stage %r is not installed -- skipped" % name)

@@ -16,6 +16,8 @@ USAGE = """geshtu — self-hosted meeting intelligence
   geshtu status                    what is recording or processing
   geshtu sessions                  past sessions
   geshtu reprocess <id>            run the pipeline again on a session
+  geshtu resumer [<id>]            chapter + summarise a session already transcribed
+                                   (the latest one by default)
   geshtu models                    engines, their device, and what they serve
   geshtu model <engine> <name>     point an engine at another model
   geshtu models add <dir|hf:id>    serve a model dropped in the repository
@@ -291,6 +293,11 @@ def main(argv: list[str] | None = None) -> int:
         print(r.get("error") or "lecture arrêtée")
         return 0 if r.get("ok") else 1
 
+    if cmd == "resumer":
+        r = call({"cmd": "resumer", "session": rest[0] if rest else None,
+                  "language": language})
+        print(r.get("error") or "queued %s" % r["session"])
+        return 0 if r.get("ok") else 1
     if cmd == "reprocess":
         if not rest:
             print("usage: geshtu reprocess <id>")

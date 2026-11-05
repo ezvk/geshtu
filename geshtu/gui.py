@@ -152,6 +152,14 @@ class Window(Gtk.ApplicationWindow):
             "Transcribe a file that already exists")
         self.openfile.connect("clicked", self.open_file)
         actions.append(self.openfile)
+        # ezvk, 2026-11-05 : « ajouter un bouton résumer la session ». Le
+        # résumé n'est plus une étape par défaut (config.py, [pipeline]).
+        self.resumer = Gtk.Button(label="📝 Résumer la séance")
+        self.resumer.set_tooltip_text(
+            "Chapitres et résumé de la dernière séance transcrite, dans la langue "
+            "choisie -- sans retranscrire ; la note est réécrite avec le résumé")
+        self.resumer.connect("clicked", self.on_resumer)
+        actions.append(self.resumer)
         box.append(actions)
 
         # ---- read the latest summary aloud (geshtu/lecture.py) ----------
@@ -473,6 +481,11 @@ class Window(Gtk.ApplicationWindow):
         call({"cmd": "lire-stop"})
         self.tick()
 
+    def on_resumer(self, _button) -> None:
+        r = call({"cmd": "resumer", "language": self.lang_code()})
+        self.log(r.get("error") or "résumé de %s en file" % r.get("session"))
+        self.tick()
+
     def lang_code(self) -> str:
         return "en" if self.lang.get_selected() == 0 else "fr"
 
@@ -549,6 +562,7 @@ class Window(Gtk.ApplicationWindow):
             self.button.add_css_class("suggested-action")
         self.button.set_sensitive(not self.busy or self.courte)
         self.openfile.set_sensitive(not self.busy and not self.recording)
+        self.resumer.set_sensitive(not self.busy and not self.recording)
         tr = r.get("traduction") or {}
         self.traduction_active = tr.get("etat") == "running"
         if self.traducteurs == ["—"]:
