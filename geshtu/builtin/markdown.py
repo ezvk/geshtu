@@ -53,6 +53,7 @@ class MarkdownSink:
         # ---- the summary: only when there is one ---------------------------
         if not a_resume:
             report("no summary -- only the transcript was written")
+            _retire_anciennes(session, [transcription], (resume, transcription), report)
             return
         lines = _entete(session) + [
             "# %s" % titre, "",
@@ -64,6 +65,40 @@ class MarkdownSink:
             lines += ["## %s  *(%s)*" % (c.title, _hms(c.start)), "", c.body, ""]
         resume.write_text("\n".join(lines), encoding="utf-8")
         report("written %s" % resume)
+        _retire_anciennes(session, [transcription, resume], (resume, transcription), report)
+
+
+def _retire_anciennes(session, ecrites, noms_actuels, report) -> None:
+    """⚠️ THE NAME FOLLOWS THE TITLE, AND THE TITLE ARRIVES LATE. A meeting is
+    first written as 2026-11-05-14-02-transcription.md; once summarised it is
+    titled, and written again under the title. The first note stayed behind,
+    the same transcript twice in the folder (ezvk, 2026-11-05 : « corrige le
+    doublon dans geshtu »).
+
+    Only a note THIS sink wrote for THIS session under ANOTHER name goes: one
+    whose name is still current is never removed (a rewrite without summary
+    keeps the summary note), and one that no longer carries this session's id
+    in its header -- replaced, or reused by someone -- is left alone.
+    """
+    for p in session.notes:
+        if p in noms_actuels or not p.is_file():
+            continue
+        if _id_de(p) != session.id:
+            continue
+        p.unlink()
+        report("old note removed: %s" % p.name)
+    session.notes = list(ecrites)
+
+
+def _id_de(note: pathlib.Path) -> str | None:
+    try:
+        with note.open(encoding="utf-8") as f:
+            for _, line in zip(range(4), f):
+                if line.startswith("id: "):
+                    return line[4:].strip()
+    except OSError:
+        pass
+    return None
 
 
 def emplacement(session, cfg) -> tuple[pathlib.Path, str]:

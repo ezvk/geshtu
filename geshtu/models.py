@@ -97,6 +97,10 @@ class Session:
     # The labels themselves are never rewritten, so the names can be changed
     # again later; only what is shown (the note, the live view) uses them.
     noms: dict = dataclasses.field(default_factory=dict)
+    # The notes the markdown sink wrote last time. Their name follows the
+    # title, and the title only arrives with the summary: without this the
+    # first note stays behind as a duplicate (builtin/markdown.py).
+    notes: list[pathlib.Path] = dataclasses.field(default_factory=list)
 
     def nom(self, speaker: str | None) -> str | None:
         return self.noms.get(speaker, speaker) if speaker else speaker
@@ -174,4 +178,5 @@ def from_dict(cls, raw: dict, root: pathlib.Path) -> Session:
     s.chapters = [Chapter(**x) for x in raw.get("chapters", [])]
     s.locuteurs = raw.get("locuteurs")
     s.noms = raw.get("noms") or {}
+    s.notes = [pathlib.Path(p) for p in raw.get("notes", [])]
     return s
