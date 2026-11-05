@@ -15,6 +15,7 @@ tiling), not from a fixed length, so a chapter ends where the subject changes.
 """
 from __future__ import annotations
 
+import bisect
 import math
 
 from geshtu import engines
@@ -30,7 +31,14 @@ from geshtu.models import Chapter
 # La contrainte reelle n a jamais ete un nombre de tranches, c est ce qui
 # tient dans le modele. On la formule donc en mots -- la seule unite qui ait
 # un rapport avec la limite qu on essaie de respecter.
-MAX_MOTS = 4500         # ~6000 jetons : large sur GPU, sous le plafond du NPU
+#
+# ⚠️ 3600, PAS 4500 : MESURE, PAS ESTIME. Reunion du 2026-11-05 (3 h 35,
+# 32 445 mots), tokenizer de Qwen3-30B : 1,91 jeton par mot, prefixes
+# « Speaker N: » compris. 4500 mots faisaient donc ~8600 jetons, au-dessus du
+# plafond du NPU AVANT meme la consigne. 3600 mots ~ 6900 jetons ; la consigne
+# (~150), les titres deja donnes et le resume cumulatif (<= 400 caracteres)
+# laissent de la marge sous 8192.
+MAX_MOTS = 3600
 MIN_SLICES = 2          # evite les chapitres croupions
 MIN_MOTS = 40           # below this, a slice joins its neighbour rather than
                         # deciding a topic boundary on its own
@@ -70,16 +78,30 @@ class Chaptering:
         threshold = mean - 0.6 * spread
         report("%d slices, similarity threshold %.3f" % (len(segs), threshold))
 
-        mots = [len(segs[i].text.split()) for i in gros]
+        # ⚠️ LE BUDGET COMPTE TOUS LES MOTS, pas seulement ceux des grosses
+        # tranches. Chaque petite tranche est comptee avec la grosse qui la
+        # precede -- celle dont elle rejoint le chapitre (celles d avant la
+        # premiere vont au premier). Mesure du 2026-11-05 : seules 132 tranches
+        # sur 2601 depassaient 40 mots, 9 343 mots sur 32 445 ; les chapitres
+        # « sous budget » en faisaient 11 091 et 16 629, refuses par le NPU.
+        mots = [0] * len(gros)
+        for i, x in enumerate(segs):
+            mots[max(bisect.bisect_right(gros, i) - 1, 0)] += len(x.text.split())
         groups = _split([list(range(len(gros)))], scores, threshold, mots)
         # ⚠️ ON REVIENT AUX BORNES REELLES : les groupes portent des indices
-        # dans la liste des tranches RETENUES, pas dans la transcription. Le
-        # premier chapitre part du debut et le dernier va jusqu a la fin, pour
-        # qu aucune parole ne tombe hors chapitre.
+        # dans la liste des tranches RETENUES, pas dans la transcription.
+        # ⚠️ ET LES CHAPITRES SE SUIVENT SANS TROU : un chapitre finit sur la
+        # tranche qui precede la premiere grosse tranche du suivant. Finir sur
+        # sa propre derniere grosse tranche laissait hors de tout chapitre les
+        # petites tranches d entre-deux -- 170 tranches, 1 407 mots jamais
+        # resumes le 2026-11-05.
         bornes = []
         for n, g in enumerate(groups):
             debut = segs[0].start if n == 0 else segs[gros[g[0]]].start
-            fin = segs[-1].end if n == len(groups) - 1 else segs[gros[g[-1]]].end
+            if n == len(groups) - 1:
+                fin = segs[-1].end
+            else:
+                fin = segs[gros[groups[n + 1][0]] - 1].end
             bornes.append(Chapter(debut, fin, "", ""))
         session.chapters = bornes
         report("%d chapters" % len(session.chapters))
