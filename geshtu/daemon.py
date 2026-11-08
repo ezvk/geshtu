@@ -34,6 +34,7 @@ import traceback
 from geshtu import commandes
 from geshtu import config
 from geshtu import engines
+from geshtu import etat
 from geshtu import lecture
 from geshtu import traduction
 from geshtu import direct
@@ -616,8 +617,15 @@ class State:
         direct_ = self.direct.status()
         with self.lock:
             s = self.session
+            # ⚠️ THE MODE IS NAMED HERE, NOT IN THE CLIENTS (geshtu/etat.py):
+            # three clients deriving it three ways is how a dictation once
+            # started meetings and a recording could not be stopped.
+            mode = etat.mode(s is not None, self.dictee_session is not None,
+                             self.commande_session is not None, bool(self.busy))
             return {
                 "ok": True,
+                "mode": mode,
+                "action": etat.ACTIONS[mode],
                 "recording": s.id if s else None,
                 "duration": s.duration if s else 0.0,
                 "tracks": [{"kind": t.kind, "source": t.source,
