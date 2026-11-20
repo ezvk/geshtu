@@ -74,6 +74,7 @@ class State:
         self.lecteur = lecture.Lecteur(self)
         self.traducteur = traduction.Traducteur(self)
         self.direct = direct.Direct(self)
+        self.capture_ecran = None          # ecran.Capture while recording, if [ecran] actif
         self.derniere = None          # the last recording stopped, for `noms`
         threading.Thread(target=self._worker, daemon=True).start()
 
@@ -547,6 +548,13 @@ class State:
             # still diarises and transcribes the whole recording.
             if session.tracks and session.tracks[0].segments:
                 self.direct.start(session, session.tracks[0].segments[0])
+            # The shared screen, kept at each change (ecran.py). Opt-in: it sees
+            # the whole screen, notifications included.
+            reglage = self.cfg.raw.get("ecran") or {}
+            if reglage.get("actif"):
+                from geshtu import ecran
+                self.capture_ecran = ecran.Capture(session, reglage, self.report)
+                self.capture_ecran.start()
             return {"ok": True, "session": session.id}
 
     def stop(self) -> dict:
@@ -560,6 +568,9 @@ class State:
             self.session = None
             self.derniere = session
         self.direct.stop()
+        if self.capture_ecran is not None:
+            self.capture_ecran.stop()
+            self.capture_ecran = None
 
         from geshtu import audio
         for track in session.tracks:

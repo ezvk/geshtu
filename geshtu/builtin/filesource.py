@@ -31,6 +31,11 @@ class FileSource:
         subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                         "-i", str(src), "-vn", "-ac", "1", "-ar", "16000",
                         str(wav)], check=True)
+        # A file with pictures (a recorded call, a conference video): the
+        # `ecrans` stage looks for the shared screen in it.
+        from geshtu import ecran
+        if session.video is None and ecran.a_des_images(src):
+            session.video = src
         return Track(kind="file", source=src.name, segments=[wav])
 
     def stop(self, session) -> None:

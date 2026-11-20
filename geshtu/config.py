@@ -24,6 +24,9 @@ channels = 1
 endpoint = "http://localhost:8094/v3/audio/transcriptions"
 model = "whisper"
 device = "NPU"
+# format = "omni" sends the audio to an omni-modal model (/chat/completions)
+# instead. ⚠️ Measured worse in French (2026-11-20, FLEURS + MLS, 980 clips):
+# Whisper turbo 5.6 % WER, LFM3-Omni-2B 7.6 % -- Whisper stays the default.
 
 [engines.llm]
 endpoint = "http://localhost:8092/v3/chat/completions"
@@ -105,6 +108,30 @@ device = "NPU"
 #
 # threshold = 0.75     # overrides the table's own "seuil" if set
 
+# The shared screen (geshtu/ecran.py, stage `ecrans`). Each state of the
+# screen that changed and then held still is kept as a picture, read by the
+# `vision` engine, and placed in the notes at its moment.
+# ⚠️ OFF BY DEFAULT: the live capture sees the WHOLE screen, notifications
+# included. `sortie` limits it to one output (grim -o), `zone` to a region
+# (grim -g "x,y wxh", e.g. from `slurp`). A video file is always looked at.
+[ecran]
+actif = false
+# sortie = "eDP-1"
+# zone = "0,0 1560x1040"
+# Measured on a 15 min conference (2026-11-20), 0 slide state lost of 29:
+# pixel = 25       # grey-level difference that counts as a changed pixel
+# cellule = 0.03   # share of ONE grid cell changed since the last picture kept
+# mouvement = 0.003
+# stable = 2       # seconds the screen must hold still
+# vivant = 5       # a cell moving on its own this often per minute is video
+#
+# The engine that reads the screens. An omni or vision model behind
+# /chat/completions (OpenAI image_url). Absent: the pictures are kept, unread.
+# [engines.vision]
+# endpoint = "http://localhost:8101/v3/chat/completions"
+# model = "lfm3-omni"
+# device = "NPU"
+
 [transcription]
 # The SPOKEN language sent to Whisper, when nothing else was chosen. The
 # window's "Audio en" menu (or `geshtu entree`) is remembered and wins.
@@ -127,7 +154,7 @@ language = "fr"
 # Chapitrage et résumé restent installés :
 # les remettre ici (ou dans ~/.config/geshtu/geshtu.toml) les réactive --
 #   stages = ["diarise", "transcribe", "chapter", "summarise"]
-stages = ["diarise", "transcribe"]
+stages = ["diarise", "transcribe", "ecrans"]
 # `mp3` AVANT `markdown` : l'enregistrement gardé en MP3 à côté de la note, puis
 # les WAV effacés (ezvk, 2026-10-21 : « 1 en mp3 fais le menage »). La note
 # ne lie l'audio que s'il existe déjà.
@@ -151,6 +178,10 @@ class Engine:
     device: str = "CPU"
     max_prompt: int | None = None
     timeout: float = 600.0
+    # How this endpoint is spoken to, when it is not the obvious way. Only the
+    # asr engine reads it: "" = Whisper's multipart /audio/transcriptions,
+    # "omni" = an omni-modal model behind /chat/completions (engines.transcribe).
+    format: str = ""
 
 
 @dataclasses.dataclass

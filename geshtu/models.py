@@ -61,6 +61,18 @@ class Turn:
 
 
 @dataclasses.dataclass
+class Ecran:
+    """One state of the shared screen, kept once it had changed and then held
+    still (geshtu/ecran.py). `t` counts from the start of the recording, on
+    the same clock as the segments, so the screen lands beside what was said
+    while it was shown."""
+
+    t: float
+    image: pathlib.Path
+    texte: str = ""
+
+
+@dataclasses.dataclass
 class Chapter:
     start: float
     end: float
@@ -87,6 +99,11 @@ class Session:
     turns: list[Turn] = dataclasses.field(default_factory=list)
     segments: list[Segment] = dataclasses.field(default_factory=list)
     chapters: list[Chapter] = dataclasses.field(default_factory=list)
+    # The shared screen: captured live (ecran.py) or found in a video file.
+    ecrans: list[Ecran] = dataclasses.field(default_factory=list)
+    # A media file with pictures, when the session was made from one: the
+    # `ecrans` stage looks for the screens in it.
+    video: pathlib.Path | None = None
     summary: str = ""
     title: str = ""
     # How many people speak, when it is known -- set per recording from the
@@ -176,6 +193,9 @@ def from_dict(cls, raw: dict, root: pathlib.Path) -> Session:
     s.turns = [Turn(**x) for x in raw.get("turns", [])]
     s.segments = [Segment(**x) for x in raw.get("segments", [])]
     s.chapters = [Chapter(**x) for x in raw.get("chapters", [])]
+    s.ecrans = [Ecran(t=x["t"], image=pathlib.Path(x["image"]), texte=x.get("texte", ""))
+                for x in raw.get("ecrans", [])]
+    s.video = pathlib.Path(raw["video"]) if raw.get("video") else None
     s.locuteurs = raw.get("locuteurs")
     s.noms = raw.get("noms") or {}
     s.notes = [pathlib.Path(p) for p in raw.get("notes", [])]

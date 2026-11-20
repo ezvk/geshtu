@@ -2,6 +2,7 @@
 configuration question and never leaks into a stage."""
 from __future__ import annotations
 
+import base64
 import json
 import pathlib
 import urllib.request
@@ -85,6 +86,8 @@ def transcribe(engine, path: pathlib.Path, language: str | None = None) -> str:
     srt and vtt all return a bare {"text": ...}. There are no timestamps to
     recover, which is why the caller slices and remembers where it cut.
     """
+    if getattr(engine, "format", "") == "omni":
+        return nettoie(_transcribe_omni(engine, path, language))
     boundary = uuid.uuid4().hex
     body = bytearray()
 
@@ -106,6 +109,75 @@ def transcribe(engine, path: pathlib.Path, language: str | None = None) -> str:
         headers={"Content-Type": "multipart/form-data; boundary=" + boundary})
     with urllib.request.urlopen(req, timeout=engine.timeout) as resp:
         return nettoie((json.loads(resp.read()).get("text") or "").strip())
+
+
+# The language names an omni model is told to transcribe in. LFM3-Omni's card:
+# « use the system prompt `Perform ASR in <language>.`, where <language> is the
+# English name of the language ». A code it was not trained on is passed as is.
+_LANGUES = {"fr": "French", "en": "English", "es": "Spanish", "it": "Italian",
+            "pt": "Portuguese", "de": "German", "ja": "Japanese", "zh": "Chinese",
+            "ru": "Russian", "ko": "Korean", "nl": "Dutch", "pl": "Polish",
+            "ar": "Arabic"}
+
+
+def _transcribe_omni(engine, path: pathlib.Path, language: str | None) -> str:
+    """An omni-modal model as the speech recogniser: the audio goes in a chat
+    turn, the instruction in the system turn, decoding is greedy.
+
+    ⚠️ THE LANGUAGE IS IN THE SYSTEM PROMPT, AND IT IS NOT OPTIONAL. Without it
+    the model is asked nothing: it answers the audio rather than transcribing
+    it. « French » when no language was chosen, the default of
+    [transcription] language.
+    """
+    nom = _LANGUES.get((language or "fr").split("-")[0], language or "French")
+    payload = {
+        "model": engine.model,
+        "messages": [
+            {"role": "system", "content": "Perform ASR in %s." % nom},
+            {"role": "user", "content": [{"type": "input_audio", "input_audio": {
+                "data": base64.b64encode(path.read_bytes()).decode(),
+                "format": "wav"}}]},
+        ],
+        "temperature": 0,
+        "max_tokens": 2048,
+    }
+    req = urllib.request.Request(
+        engine.endpoint, data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=engine.timeout) as resp:
+        out = json.loads(resp.read())
+    texte = ((out.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    # The model is non-reasoning but its template opens every answer with an
+    # empty <think></think>; a server that does not strip it hands it back.
+    return texte.replace("<think>", "").replace("</think>", "").strip()
+
+
+def read_image(engine, image: pathlib.Path, prompt: str, system: str = "",
+               max_tokens: int = 900) -> str:
+    """One image and one question in, text out (OpenAI image_url, data URI).
+
+    Greedy: what is wanted is what is written on the screen, not a variation.
+    """
+    mime = "image/png" if image.suffix.lower() == ".png" else "image/jpeg"
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": "data:%s;base64,%s" % (
+            mime, base64.b64encode(image.read_bytes()).decode())}},
+        {"type": "text", "text": prompt}]})
+    # ⚠️ enable_thinking false: LFM3-VL's template reasons by default
+    # (OpenVINO/LFM3-VL-2B-int4-ov card), and a screen to copy needs none.
+    payload = {"model": engine.model, "messages": messages,
+               "temperature": 0, "max_tokens": max_tokens,
+               "chat_template_kwargs": {"enable_thinking": False}}
+    req = urllib.request.Request(
+        engine.endpoint, data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=engine.timeout) as resp:
+        out = json.loads(resp.read())
+    texte = ((out.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    return texte.replace("<think>", "").replace("</think>", "").strip()
 
 
 def chat(engine, prompt: str, system: str = "", max_tokens: int = 1100,

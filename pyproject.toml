@@ -42,6 +42,7 @@ transcribe = "geshtu.builtin.asr:Transcribe"
 diarise = "geshtu.builtin.diarise:Diarise"
 chapter = "geshtu.builtin.chapters:Chaptering"
 summarise = "geshtu.builtin.summary:Summarise"
+ecrans = "geshtu.builtin.ecrans:Ecrans"
 
 [project.entry-points."geshtu.sinks"]
 markdown = "geshtu.builtin.markdown:MarkdownSink"

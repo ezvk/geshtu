@@ -116,7 +116,8 @@ BUILTIN = {
     "geshtu.stages": {"transcribe": ("geshtu.builtin.asr", "Transcribe"),
                       "diarise": ("geshtu.builtin.diarise", "Diarise"),
                       "chapter": ("geshtu.builtin.chapters", "Chaptering"),
-                      "summarise": ("geshtu.builtin.summary", "Summarise")},
+                      "summarise": ("geshtu.builtin.summary", "Summarise"),
+                      "ecrans": ("geshtu.builtin.ecrans", "Ecrans")},
     "geshtu.sinks": {"markdown": ("geshtu.builtin.markdown", "MarkdownSink")},
 }
 

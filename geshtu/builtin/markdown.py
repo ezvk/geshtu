@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import pathlib
 import re
+import shutil
 import time
+import unicodedata
 
 
 class MarkdownSink:
@@ -43,10 +45,18 @@ class MarkdownSink:
         if a_resume:
             lines += ["Résumé : [%s](%s)" % (resume.name, resume.name), ""]
         lines += _lien_audio(session, out)
+        ecrans = _copie_ecrans(session, out, base)
+        # The screens go IN the transcript, where they were shown: what was
+        # said about a slide is read beside the slide.
+        a_placer = list(ecrans)
         for s in session.segments:
+            while a_placer and a_placer[0][0].t <= s.start:
+                lines += _bloc_ecran(*a_placer.pop(0))
             qui = ("**%s** " % session.nom(s.speaker)) if s.speaker else ""
             lines.append("%s`%s` %s" % (qui, _hms(s.start), s.text))
             lines.append("")
+        for e in a_placer:
+            lines += _bloc_ecran(*e)
         transcription.write_text("\n".join(lines), encoding="utf-8")
         report("written %s" % transcription)
 
@@ -63,9 +73,45 @@ class MarkdownSink:
             lines += [session.summary, ""]
         for c in chapitres:
             lines += ["## %s  *(%s)*" % (c.title, _hms(c.start)), "", c.body, ""]
+        # ⚠️ THE SCREENS ARE MATERIAL FOR THE FINAL DOCUMENT (ezvk, 2026-11-20:
+        # « matière à insérer dans doc final »): each one whole, picture first,
+        # so it can be lifted as it is into a report.
+        if ecrans:
+            lines += ["## Écrans partagés", ""]
+            for e in ecrans:
+                lines += _bloc_ecran(*e, citation=False)
         resume.write_text("\n".join(lines), encoding="utf-8")
         report("written %s" % resume)
         _retire_anciennes(session, [transcription, resume], (resume, transcription), report)
+
+
+def _copie_ecrans(session, out: pathlib.Path, base: str) -> list:
+    """The kept screens, copied beside the notes (<base>-ecrans/), as
+    (Ecran, relative link) pairs. A note must not point into the session
+    folder: that one is internal and goes when the session is cleaned."""
+    if not session.ecrans:
+        return []
+    dossier = out / (base + "-ecrans")
+    dossier.mkdir(parents=True, exist_ok=True)
+    pris = []
+    for e in session.ecrans:
+        if not e.image.exists():
+            continue
+        cible = dossier / e.image.name
+        if not cible.exists() or cible.stat().st_size != e.image.stat().st_size:
+            shutil.copy2(e.image, cible)
+        pris.append((e, "%s/%s" % (dossier.name, cible.name)))
+    return pris
+
+
+def _bloc_ecran(e, lien: str, citation: bool = True) -> list[str]:
+    tete = "🖥️ **Écran partagé** `%s`" % _hms(e.t)
+    corps = [tete, "", "![%s](%s)" % (_hms(e.t), lien), ""]
+    if e.texte:
+        corps += [e.texte, ""]
+    if not citation:
+        return corps
+    return [("> " + ligne) if ligne else ">" for ligne in corps[:-1]] + [""]
 
 
 def _retire_anciennes(session, ecrites, noms_actuels, report) -> None:
@@ -111,7 +157,10 @@ def emplacement(session, cfg) -> tuple[pathlib.Path, str]:
     # The session id already begins with the date; repeating it gives
     # names like 2026-09-21-2026-09-21-11-12.md.
     name = session.title or session.id.removeprefix(day).strip("_-") or "session"
-    slug = re.sub(r"[^A-Za-z0-9]+", "-", name)[:60].strip("-").lower()
+    # ⚠️ ACCENTS ARE FOLDED, NOT DROPPED: « énergétique » became « nerg-tique »
+    # (2026-11-20). The accented letter becomes its base letter first.
+    plat = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", plat)[:60].strip("-").lower()
     return out, "%s-%s" % (day, slug or "session")
 
 

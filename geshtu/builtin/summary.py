@@ -19,6 +19,7 @@ MIN_WORDS = 40          # below this a chapter has nothing to summarise
 
 PROMPTS = {
     "en": {
+        "screen": "Shared screen",
         "system": "You summarise meeting transcripts. Be factual. "
                   "Never invent a decision that was not stated.",
         "chapter": ("Transcript of one part of a meeting:\n\n%s\n\n"
@@ -36,6 +37,7 @@ PROMPTS = {
                       "Omit a section entirely rather than filling it."),
     },
     "fr": {
+        "screen": "Écran partagé",
         "system": "Tu résumes des transcriptions de réunion. Sois factuel. "
                   "N'invente jamais une décision qui n'a pas été énoncée.",
         "chapter": ("Transcription d'une partie de réunion :\n\n%s\n\n"
@@ -79,7 +81,16 @@ class Summarise:
             for s in session.segments:
                 if s.start < chapter.start or s.end > chapter.end:
                     continue
-                morceaux.append("%s: %s" % (s.speaker, s.text) if s.speaker else s.text)
+                morceaux.append((s.start, "%s: %s" % (s.speaker, s.text)
+                                 if s.speaker else s.text))
+            # What was ON THE SCREEN enters the prompt at its moment: the
+            # numbers of a slide are rarely said aloud, and a summary without
+            # them misses what the meeting looked at.
+            for e in session.ecrans:
+                if e.texte and chapter.start <= e.t < chapter.end:
+                    etiquette = words.get("screen", "Shared screen")
+                    morceaux.append((e.t, "[%s]\n%s" % (etiquette, e.texte)))
+            morceaux = [m for _, m in sorted(morceaux, key=lambda x: x[0])]
             text = "\n".join(morceaux).strip()
             if len(text.split()) < MIN_WORDS:
                 report("  chapter %d skipped: %d words" % (i, len(text.split())))
