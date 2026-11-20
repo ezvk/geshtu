@@ -108,7 +108,14 @@ def _bloc_ecran(e, lien: str, citation: bool = True) -> list[str]:
     tete = "🖥️ **Écran partagé** `%s`" % _hms(e.t)
     corps = [tete, "", "![%s](%s)" % (_hms(e.t), lien), ""]
     if e.texte:
-        corps += [e.texte, ""]
+        # Line by line: the text is several lines, and each needs its own "> "
+        # (measured on utu, 2026-11-20: only the first one stayed in the quote).
+        # A heading the model wrote (« ## Contenu de l'écran ») would cut the
+        # note's own sections, so it becomes bold text.
+        for ligne in e.texte.strip().splitlines():
+            titre = re.match(r"\s*#{1,6}\s+(.*)", ligne)
+            corps.append("**%s**" % titre.group(1).strip("* ") if titre else ligne)
+        corps.append("")
     if not citation:
         return corps
     return [("> " + ligne) if ligne else ">" for ligne in corps[:-1]] + [""]
