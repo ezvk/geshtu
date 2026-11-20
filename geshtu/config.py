@@ -118,6 +118,9 @@ device = "NPU"
 actif = false
 # sortie = "eDP-1"
 # zone = "0,0 1560x1040"
+# fenetre = "teams-for-linux"   # ONE window, by app-id or a piece of its title:
+#   captured even on a hidden workspace and with the screen asleep (grim -T);
+#   the whole-screen capture sees nothing while the screen is off.
 # Measured on a 15 min conference (2026-11-20), 0 slide state lost of 29:
 # pixel = 25       # grey-level difference that counts as a changed pixel
 # cellule = 0.03   # share of ONE grid cell changed since the last picture kept

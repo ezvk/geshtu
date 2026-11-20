@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import collections
 import dataclasses
+import json
 import pathlib
 import subprocess
 import threading
@@ -145,6 +146,13 @@ class Capture:
 
     ⚠️ IT SEES THE WHOLE SCREEN, NOTIFICATIONS INCLUDED. Off unless [ecran]
     actif = true, and `sortie` / `zone` narrow it to one output or one region.
+
+    `fenetre` (an app-id, or a piece of the title) watches ONE window instead,
+    through ext-foreign-toplevel-list + ext-image-copy-capture (grim -T). Measured
+    on utu under mango (2026-11-20): the window is captured whole and up to date
+    while it sits on a hidden tag, AND while the screen is asleep -- which the
+    whole-screen capture is not (grim timed out on every try, screen off). The
+    visio can then stay on its own tag while work goes on elsewhere (ezvk).
     """
 
     def __init__(self, session, raw: dict, report=print):
@@ -155,9 +163,18 @@ class Capture:
         self.dossier = session.root / "ecrans"
         self.arret = threading.Event()
         self.fil: threading.Thread | None = None
+        self.toplevel = ""
 
     def _grim(self, *options: str) -> list[str]:
         cmd = ["grim"]
+        if self.raw.get("fenetre"):
+            # Looked up again whenever lost: a window closed and reopened (a
+            # meeting popup) comes back under a new identifier.
+            if not self.toplevel:
+                self.toplevel = fenetre(self.raw["fenetre"])
+            if not self.toplevel:
+                raise RuntimeError("no window matches %r" % self.raw["fenetre"])
+            return cmd + ["-T", self.toplevel] + list(options)
         if self.raw.get("sortie"):
             cmd += ["-o", self.raw["sortie"]]
         if self.raw.get("zone"):
@@ -181,6 +198,7 @@ class Capture:
             try:
                 gris, w, h = _vignette(self._grim("-s", "0.1", "-t", "ppm", "-"))
             except Exception as exc:                     # noqa: BLE001
+                self.toplevel = ""
                 echecs += 1
                 if echecs in (1, 30):      # said once, and again if it persists
                     self.report("screen capture failed: %s" % exc)
@@ -195,6 +213,23 @@ class Capture:
             if r.returncode == 0:
                 self.session.ecrans.append(_ecran(t, image))
                 self.report("screen kept at %s" % _hms(t))
+
+
+def fenetre(motif: str) -> str:
+    """The foreign-toplevel identifier of the window `motif` names: its app-id
+    exactly, else the first window whose title contains it (any case). "" when
+    none is open. Read with lswt (ext-foreign-toplevel-list-v1)."""
+    r = subprocess.run(["lswt", "-j"], capture_output=True, text=True, timeout=10)
+    if r.returncode != 0:
+        raise RuntimeError("lswt: %s" % r.stderr.strip()[:200])
+    fenetres = json.loads(r.stdout).get("toplevels", [])
+    for f in fenetres:
+        if f.get("app-id") == motif:
+            return f.get("identifier", "")
+    for f in fenetres:
+        if motif.lower() in (f.get("title") or "").lower():
+            return f.get("identifier", "")
+    return ""
 
 
 def _ecran(t, image):
