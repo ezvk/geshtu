@@ -123,6 +123,17 @@ There is also a window (`geshtu-gui`) and a tray icon (`geshtu-tray`), both
 thin clients: neither holds any state, both ask the daemon every three
 seconds, so a recording started from the keyboard shows up in both.
 
+The daemon also names what it is doing, so that no client has to work it out:
+every `status` answer carries `mode` -- `recording`, `dictating`,
+`commanding`, `processing` or `idle`, in that order of precedence -- and
+`action`, what the main toggle does in that mode: `stop`, `discard`, `wait`
+or `start` (`geshtu/etat.py`). A script or an agent can read the same two
+fields:
+
+```sh
+printf '{"cmd":"status"}\n' | nc -U $XDG_RUNTIME_DIR/geshtu.sock | jq -r '.mode, .action'
+```
+
 An application target **only exists while it is playing**, and each stream is
 its own target — a browser lists one entry per tab, marked ▶ when it is making
 sound and ‖ when it is not. Start the playback first, then list the targets.

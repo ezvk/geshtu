@@ -35,6 +35,7 @@ import gi
 from gi.repository import Gio    # noqa: E402
 from gi.repository import GLib   # noqa: E402
 
+from geshtu import etat         # noqa: E402
 from geshtu.cli import call      # noqa: E402
 from geshtu.cli import hms       # noqa: E402
 
@@ -134,6 +135,8 @@ class Item:
         # new asset drawn.
         self.listening = False
         self.busy = False
+        # What the daemon says a middle click does (geshtu/etat.py).
+        self.action = "start"
         self.summary = "idle"
         self.status = "Active"
 
@@ -204,18 +207,13 @@ class Item:
 
     # ----------------------------------------------------------- actions
     def toggle(self) -> None:
-        # ⚠️ `listening`, NOT `recording`: during a dictation the icon shows
-        # the red dot, so a middle click must end it. Testing `recording`
-        # alone STARTED a meeting instead (ezvk, 2026-10-08, see
-        # daemon._abandonne_courte). Checked before `busy`: a dictation can
-        # run while a meeting is still being processed.
-        if self.listening and not self.recording:
-            call({"cmd": "stop"})
-            self.tick()
+        # ⚠️ THE DAEMON DECIDES WHAT A MIDDLE CLICK DOES (geshtu/etat.py).
+        # Worked out here, it once STARTED a meeting during a dictation (ezvk,
+        # 2026-10-08, see daemon._abandonne_courte), and did nothing on a
+        # recording started while the previous one was being processed.
+        if self.action == "wait":
             return
-        if self.busy:
-            return
-        if self.recording:
+        if self.action in ("stop", "discard"):
             call({"cmd": "stop"})
         else:
             # ⚠️ NO SOURCE PICKER HERE, and that is deliberate: an application
@@ -235,25 +233,24 @@ class Item:
 
     def apply(self, r) -> bool:
         was_listening, was_status = self.listening, self.status
-        self.recording = bool(r.get("recording"))
+        mode, self.action = etat.depuis(r)
+        self.recording = mode == "recording"
         self.busy = bool(r.get("processing"))
         # ⚠️ MINIMAL GUI PIECES, NOT A REDESIGN: no new icon asset, no new
-        # window. `dictating`/`commanding` share the exact LIVE-icon /
+        # window. Every capture mode shares the exact LIVE-icon /
         # NeedsAttention machinery already built for meeting recording --
-        # both already mean "something is capturing audio right now".
-        dictating = bool(r.get("dictating"))
-        commanding = bool(r.get("commanding"))
-        self.listening = self.recording or dictating or commanding
-        if self.recording:
+        # all mean "something is capturing audio right now".
+        self.listening = mode in etat.CAPTURE
+        if mode == "recording":
             self.summary = "recording — %s" % hms(r.get("duration", 0))
             self.status = "NeedsAttention"
-        elif dictating:
+        elif mode == "dictating":
             self.summary = "dictée en cours…"
             self.status = "NeedsAttention"
-        elif commanding:
+        elif mode == "commanding":
             self.summary = "commande…"
             self.status = "NeedsAttention"
-        elif self.busy:
+        elif mode == "processing":
             self.summary = "processing %s" % r["processing"]
             self.status = "Active"
         else:

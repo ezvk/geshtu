@@ -192,14 +192,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd == "status":
         r = call({"cmd": "status"})
-        if r.get("recording"):
+        # The daemon's own mode (geshtu/etat.py): this used to say « idle »
+        # during a dictation, while the microphone was being captured.
+        from geshtu import etat
+        mode, _ = etat.depuis(r)
+        if mode == "recording":
             print("recording %s  %s" % (r["recording"], hms(r["duration"])))
             for t in r["tracks"]:
                 print("  track %-7s %s" % (t["kind"], t["source"]))
-        elif r.get("processing"):
+        elif mode in ("dictating", "commanding"):
+            print(mode)
+        elif mode == "processing":
             print("processing %s" % r["processing"])
         else:
             print("idle")
+        # A capture may run while an earlier recording is processed: say both.
+        if mode in etat.CAPTURE and r.get("processing"):
+            print("  processing %s" % r["processing"])
         for line in r.get("log", []):
             print("  %s" % line)
         return 0

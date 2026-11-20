@@ -20,6 +20,8 @@ from gi.repository import Gio   # noqa: E402
 from gi.repository import GLib  # noqa: E402
 from gi.repository import Gtk   # noqa: E402
 
+# Not imported as `etat`: apply() has a local `etat` (the reading's).
+from geshtu import etat as etat_demon  # noqa: E402
 from geshtu.cli import call     # noqa: E402
 from geshtu.cli import hms      # noqa: E402
 
@@ -33,7 +35,8 @@ class Window(Gtk.ApplicationWindow):
         self.set_default_size(620, 620)
         self.busy = False
         self.recording = False
-        self.courte = False
+        # What the daemon says the main button does (geshtu/etat.py).
+        self.action = "start"
         self.traduction_active = False
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -382,17 +385,12 @@ class Window(Gtk.ApplicationWindow):
 
     # ------------------------------------------------------------- actions
     def toggle(self, _button) -> None:
-        # ⚠️ A dictation or voice command first, and before `busy`: the button
-        # used to read "Start recording" during one and started a meeting
-        # (same fault as the tray, see daemon._abandonne_courte).
-        if self.courte and not self.recording:
+        # ⚠️ THE DAEMON DECIDES WHAT THIS BUTTON DOES (geshtu/etat.py). Worked
+        # out here, it once started a meeting during a dictation, and refused
+        # to stop a recording while the previous one was being processed.
+        if self.action in ("stop", "discard"):
             self.stop()
-            return
-        if self.busy:
-            return
-        if self.recording:
-            self.stop()
-        else:
+        elif self.action == "start":
             self.start()
 
     def start(self) -> None:
@@ -538,21 +536,21 @@ class Window(Gtk.ApplicationWindow):
         return True
 
     def apply(self, r) -> bool:
-        self.recording = bool(r.get("recording"))
+        mode, self.action = etat_demon.depuis(r)
+        self.recording = mode == "recording"
         self.busy = bool(r.get("processing"))
-        self.courte = bool(r.get("dictating") or r.get("commanding"))
-        if self.recording:
+        if mode == "recording":
             self.state.set_text("recording %s   %s"
                                 % (r["recording"], hms(r.get("duration", 0))))
             self.button.set_label("Stop and transcribe")
             self.button.remove_css_class("suggested-action")
             self.button.add_css_class("destructive-action")
-        elif self.courte:
-            self.state.set_text("dictée en cours" if r.get("dictating") else "commande en cours")
+        elif mode in ("dictating", "commanding"):
+            self.state.set_text("dictée en cours" if mode == "dictating" else "commande en cours")
             self.button.set_label("Arrêter sans transcrire")
             self.button.remove_css_class("suggested-action")
             self.button.add_css_class("destructive-action")
-        elif self.busy:
+        elif mode == "processing":
             self.state.set_text("processing %s on the accelerator" % r["processing"])
             self.button.set_label("working…")
         else:
@@ -560,7 +558,7 @@ class Window(Gtk.ApplicationWindow):
             self.button.set_label("Start recording")
             self.button.remove_css_class("destructive-action")
             self.button.add_css_class("suggested-action")
-        self.button.set_sensitive(not self.busy or self.courte)
+        self.button.set_sensitive(self.action != "wait")
         self.openfile.set_sensitive(not self.busy and not self.recording)
         self.resumer.set_sensitive(not self.busy and not self.recording)
         tr = r.get("traduction") or {}
