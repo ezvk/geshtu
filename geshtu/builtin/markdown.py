@@ -24,7 +24,10 @@ class MarkdownSink:
         # which is indistinguishable at a glance from a real note and quietly
         # fills the folder. The daemon log already said why it was silent;
         # repeating it as a document helps nobody.
-        if not session.segments:
+        # A session with shared screens and no speech (a silent demo, a muted
+        # call) still has something to keep: measured on utu, 2026-11-20, six
+        # screens read and no note at all.
+        if not session.segments and not session.ecrans:
             report("nothing was transcribed -- no note written")
             return
         out, base = emplacement(session, cfg)
