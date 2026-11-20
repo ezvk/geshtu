@@ -140,7 +140,21 @@ def _retire_anciennes(session, ecrites, noms_actuels, report) -> None:
             continue
         p.unlink()
         report("old note removed: %s" % p.name)
+        # Its screens went with it: <base>-ecrans/ beside the old name
+        # (measured on utu, 2026-11-20: the folder stayed after the rename).
+        ancien = _dossier_ecrans(p)
+        if ancien and ancien not in {_dossier_ecrans(n) for n in noms_actuels} \
+                and ancien.is_dir():
+            shutil.rmtree(ancien)
+            report("old screens removed: %s" % ancien.name)
     session.notes = list(ecrites)
+
+
+def _dossier_ecrans(note: pathlib.Path) -> pathlib.Path | None:
+    for fin in ("-transcription.md", "-resume.md"):
+        if note.name.endswith(fin):
+            return note.with_name(note.name[:-len(fin)] + "-ecrans")
+    return None
 
 
 def _id_de(note: pathlib.Path) -> str | None:
