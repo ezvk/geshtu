@@ -39,9 +39,27 @@ from geshtu.models import Chapter
 # (~150), les titres deja donnes et le resume cumulatif (<= 400 caracteres)
 # laissent de la marge sous 8192.
 MAX_MOTS = 3600
+# The same measure, for an endpoint that declares its own ceiling
+# ([engines.llm] max_prompt, in tokens): 1.91 tokens per word, and 1 500
+# tokens kept for the instruction, the titles already given and the answer.
+# ⚠️ THE WHOLE MEETING IN ONE PROMPT WHEN IT FITS. ezvk, 2026-11-20: « on ne
+# peut résumer que sur le gpu, on a besoin du contexte max pour être
+# cohérent ». A chapter only exists to fit the model; on the GPU, a meeting
+# under the budget is summarised in one piece.
+JETONS_PAR_MOT = 1.91
+RESERVE = 1500
 MIN_SLICES = 2          # evite les chapitres croupions
+MOTS_EMBED = 250        # sous le plafond de 512 jetons de l embedder
 MIN_MOTS = 40           # below this, a slice joins its neighbour rather than
                         # deciding a topic boundary on its own
+
+
+def budget_mots(cfg) -> int:
+    eng = cfg.engines.get("llm")
+    jetons = getattr(eng, "max_prompt", 0) or 0
+    if jetons <= RESERVE:
+        return MAX_MOTS
+    return int((jetons - RESERVE) / JETONS_PAR_MOT)
 
 
 class Chaptering:
@@ -68,8 +86,13 @@ class Chaptering:
             report("%d slices, too few to chapter" % len(gros))
             return
 
+        # ⚠️ L EMBEDDER A UN PLAFOND, ET IL REFUSE AU LIEU DE COUPER. harrier
+        # sur OVMS (2026-11-20) : « Input length 562 longer than allowed » --
+        # un 400 pour une tranche de 334 mots, qui emportait tout le
+        # chapitrage. Le sujet d une tranche se lit dans son debut : on
+        # n envoie que ses MOTS_EMBED premiers mots (300 passent, mesure).
         vectors = engines.embed(cfg.engine("embed"),
-                                [segs[i].text for i in gros])
+                                [" ".join(segs[i].text.split()[:MOTS_EMBED]) for i in gros])
         scores = [_cosine(vectors[i], vectors[i + 1]) for i in range(len(vectors) - 1)]
         mean = sum(scores) / len(scores)
         spread = (sum((x - mean) ** 2 for x in scores) / len(scores)) ** 0.5
@@ -87,7 +110,8 @@ class Chaptering:
         mots = [0] * len(gros)
         for i, x in enumerate(segs):
             mots[max(bisect.bisect_right(gros, i) - 1, 0)] += len(x.text.split())
-        groups = _split([list(range(len(gros)))], scores, threshold, mots)
+        budget = budget_mots(cfg)
+        groups = _split([list(range(len(gros)))], scores, threshold, mots, budget)
         # ⚠️ ON REVIENT AUX BORNES REELLES : les groupes portent des indices
         # dans la liste des tranches RETENUES, pas dans la transcription.
         # ⚠️ ET LES CHAPITRES SE SUIVENT SANS TROU : un chapitre finit sur la
@@ -107,15 +131,15 @@ class Chaptering:
         report("%d chapters" % len(session.chapters))
 
 
-def _split(groups, scores, threshold, mots=None):
+def _split(groups, scores, threshold, mots=None, budget=MAX_MOTS):
     out = []
     for g in groups:
-        out.extend(_one(g, scores, threshold, mots))
+        out.extend(_one(g, scores, threshold, mots, budget))
     return out
 
 
-def _one(idx, scores, threshold, mots=None):
-    if mots is None or sum(mots[i] for i in idx) <= MAX_MOTS:
+def _one(idx, scores, threshold, mots=None, budget=MAX_MOTS):
+    if mots is None or sum(mots[i] for i in idx) <= budget:
         return [idx]
     # Force a cut at the deepest similarity trough inside the group, then
     # recurse: this keeps long monologues from becoming one giant chapter.
@@ -125,7 +149,8 @@ def _one(idx, scores, threshold, mots=None):
     right = [i for i in idx if i > at]
     if not left or not right:
         return [idx]
-    return _one(left, scores, threshold, mots) + _one(right, scores, threshold, mots)
+    return (_one(left, scores, threshold, mots, budget)
+            + _one(right, scores, threshold, mots, budget))
 
 
 def _cosine(a, b):
