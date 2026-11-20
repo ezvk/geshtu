@@ -553,16 +553,18 @@ class State:
             reglage = dict(self.cfg.raw.get("ecran") or {})
             # ⚠️ THE SCREEN FOLLOWS THE SOUND. Recording one application (or
             # one browser tab) means watching ITS window, found again on its
-            # own -- hidden workspace and sleeping screen included. Only an
-            # explicit `fenetre` in the config overrides it; the whole output
-            # or the microphone keep the whole screen.
-            if not reglage.get("fenetre"):
-                for key in keys:
-                    t = known.get(key)
-                    if key.startswith("appli:"):
-                        reglage["fenetre"] = key.split(":", 1)[1]
-                    elif t is not None and t.kind == "app":
-                        reglage["fenetre"] = t.label
+            # own -- hidden workspace and sleeping screen included. That wins
+            # over the config; the config's `fenetre` then covers the sources
+            # that name no window (the whole output, the microphone), and only
+            # without it is the whole screen taken. Measured 2026-11-20: with
+            # the config's `fenetre` removed, « everything I hear » -- the
+            # window's default source -- went back to the whole screen.
+            for key in keys:
+                t = known.get(key)
+                if key.startswith("appli:"):
+                    reglage["fenetre"] = key.split(":", 1)[1]
+                elif t is not None and t.kind == "app":
+                    reglage["fenetre"] = t.label
             if reglage.get("actif"):
                 from geshtu import ecran
                 self.capture_ecran = ecran.Capture(session, reglage, self.report)
