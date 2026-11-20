@@ -52,6 +52,23 @@ from geshtu.models import Track
 
 SINK = "geshtu-tap"
 
+# A browser is one program for every tab: its streams are offered one by one
+# (a meeting tab, not the video in the next one). Any other application is
+# offered whole. ezvk : « soit l'appli, soit une des tabs du navigateur ».
+NAVIGATEURS = ("firefox", "librewolf", "zen", "chromium", "chrome", "brave",
+               "vivaldi", "opera", "epiphany", "ladybird", "qutebrowser")
+
+
+def nom_appli(props: dict) -> str:
+    """The program a stream belongs to. ⚠️ application.name is often absent
+    from the NODE: Teams for Linux carries only node.name (2026-11-20)."""
+    return props.get("application.name") or props.get("node.name") or "?"
+
+
+def navigateur(props: dict) -> bool:
+    return any(n in nom_appli(props).lower() for n in NAVIGATEURS)
+
+
 SINK_ARGS = (
     "{ factory.name=support.null-audio-sink"
     " node.name=%s"
@@ -111,9 +128,10 @@ class PipeWireSource:
             label = (props.get("media.name") or "").strip()
             counts[label] = counts.get(label, 0) + 1
         for nid, props in sorted(nodes.items()):
-            if nid not in with_ports:
+            # One line per stream for the browsers only (one per tab).
+            if nid not in with_ports or not navigateur(props):
                 continue
-            app = props.get("application.name") or props.get("node.name") or "?"
+            app = nom_appli(props)
             media = (props.get("media.name") or "").strip()
             # two untitled streams of one program are otherwise
             # indistinguishable; the node id is the only handle there is
@@ -122,6 +140,21 @@ class PipeWireSource:
             mark = "▶ " if props.get("_state") == "running" else "‖ "
             out.append(plugins.Target("node:%d" % nid, app, "app",
                                       (mark + media)[:72]))
+
+        # ⚠️ ONE ENTRY PER APPLICATION, ALL ITS STREAMS. A call is not one
+        # stream: Teams for Linux held four output streams in one meeting
+        # (2026-11-20), and the sound of a shared window arrived on one opened
+        # mid-call. Picking a single node loses the voices or the share; the
+        # whole output takes the rest of the machine with it (ezvk : « source
+        # réunion teams qui prend tous les flux de teams uniquement »).
+        apps: dict[str, list] = {}
+        for nid, props in nodes.items():
+            if nid in with_ports and not navigateur(props):
+                apps.setdefault(nom_appli(props), []).append(props.get("_state") == "running")
+        for app, etats in sorted(apps.items()):
+            mark = "▶ " if any(etats) else "‖ "
+            out.append(plugins.Target("appli:" + app, app, "app",
+                                      "%sall its streams (%d now)" % (mark, len(etats))))
 
         # ⚠️ Playing streams first: the list is read in a hurry, at the moment
         # a meeting starts, and the one that matters is almost always the one
@@ -225,7 +258,12 @@ class PipeWireSource:
             target = plugins.Target(sink, sink, "output")
 
         node_id = None
-        if target.kind == "app":
+        appli = target.key.split(":", 1)[1] if target.key.startswith("appli:") else None
+        if appli is not None:
+            if not self._create_sink():
+                raise RuntimeError("could not create the capture sink %s" % SINK)
+            cmd += ["--target", SINK, "-P", "stream.capture.sink=true"]
+        elif target.kind == "app":
             node_id = int(target.key.split(":", 1)[1])
             if node_id not in _nodes():
                 raise RuntimeError("that stream is gone -- list the targets again")
@@ -244,7 +282,15 @@ class PipeWireSource:
                                 stderr=subprocess.DEVNULL)
         (session.root / ("%s.pid" % _safe(target.key))).write_text(str(proc.pid))
 
-        if target.kind == "app":
+        if appli is not None:
+            with_ports = _nodes_with_ports()
+            liens = sum(self._derive(nid, session) for nid, p in _nodes().items()
+                        if nom_appli(p) == appli and nid in with_ports)
+            # Same rule as one stream: zero links is a hard failure.
+            if liens == 0:
+                raise RuntimeError("%s plays nothing right now -- nothing was linked" % appli)
+            self._watch(None, {}, session, appli=appli)
+        elif target.kind == "app":
             props = _nodes().get(node_id, {})
             # ⚠️ ZERO LINKS IS A HARD FAILURE, NEVER A WARNING. Without a
             # link the recorder happily captures the capture sink's own
@@ -257,7 +303,7 @@ class PipeWireSource:
 
         return Track(kind=target.kind, source=target.label, segments=[wav])
 
-    def _watch(self, node_id: int, props: dict, session) -> None:
+    def _watch(self, node_id, props: dict, session, appli: str | None = None) -> None:
         """Re-derive every two seconds.
 
         ⚠️ WHY A LOOP AND NOT A SINGLE LINK. A reloaded tab, a restarted call
@@ -279,6 +325,9 @@ class PipeWireSource:
             "node": node_id,
             "pid": props.get("application.process.id"),
             "media": props.get("media.name"),
+            # Whole application: EVERY output stream it has, re-read each
+            # round -- a stream opened mid-call is derived within two seconds.
+            "appli": appli,
         }
         script = session.root / "watch.py"
         script.write_text(WATCHER)
@@ -408,6 +457,10 @@ spec = json.loads(sys.argv[2])
 SINK = "%s"
 
 
+def nom_appli(props):
+    return props.get("application.name") or props.get("node.name") or "?"
+
+
 def dump():
     try:
         return json.loads(subprocess.run(["pw-dump"], capture_output=True,
@@ -423,8 +476,10 @@ def resolve(objs, props_of):
     for oid, p in props_of.items():
         if p.get("media.class") == "Stream/Output/Audio":
             live.add(oid)
+    if spec.get("appli"):
+        return [oid for oid in sorted(live) if nom_appli(props_of[oid]) == spec["appli"]]
     if spec["node"] in live:
-        return spec["node"]
+        return [spec["node"]]
     for oid in sorted(live):
         p = props_of[oid]
         if spec.get("pid") is not None:
@@ -432,15 +487,15 @@ def resolve(objs, props_of):
                 continue
         if spec.get("media") and p.get("media.name") == spec["media"]:
             spec["node"] = oid
-            return oid
-    return None
+            return [oid]
+    return []
 
 
 while (root / "watch.pid").exists():
     objs = dump()
     props_of = {o.get("id"): ((o.get("info") or {}).get("props") or {}) for o in objs}
-    node = resolve(objs, props_of)
-    if node is not None:
+    nodes = resolve(objs, props_of)
+    if nodes:
         tap = {}
         for o in objs:
             if not o.get("type", "").endswith("Port"):
@@ -453,7 +508,7 @@ while (root / "watch.pid").exists():
             if not o.get("type", "").endswith("Port"):
                 continue
             p = (o.get("info") or {}).get("props") or {}
-            if p.get("node.id") != node or p.get("port.direction") != "out":
+            if p.get("node.id") not in nodes or p.get("port.direction") != "out":
                 continue
             chan = (p.get("port.name") or "").rsplit("_", 1)[-1]
             dst = tap.get("playback_" + (chan if chan in ("FL", "FR") else "FL"))

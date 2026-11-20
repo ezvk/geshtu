@@ -550,7 +550,19 @@ class State:
                 self.direct.start(session, session.tracks[0].segments[0])
             # The shared screen, kept at each change (ecran.py). Opt-in: it sees
             # the whole screen, notifications included.
-            reglage = self.cfg.raw.get("ecran") or {}
+            reglage = dict(self.cfg.raw.get("ecran") or {})
+            # ⚠️ THE SCREEN FOLLOWS THE SOUND. Recording one application (or
+            # one browser tab) means watching ITS window, found again on its
+            # own -- hidden workspace and sleeping screen included. Only an
+            # explicit `fenetre` in the config overrides it; the whole output
+            # or the microphone keep the whole screen.
+            if not reglage.get("fenetre"):
+                for key in keys:
+                    t = known.get(key)
+                    if key.startswith("appli:"):
+                        reglage["fenetre"] = key.split(":", 1)[1]
+                    elif t is not None and t.kind == "app":
+                        reglage["fenetre"] = t.label
             if reglage.get("actif"):
                 from geshtu import ecran
                 self.capture_ecran = ecran.Capture(session, reglage, self.report)

@@ -167,8 +167,10 @@ class Traducteur:
             self.voix = target.kind not in ("output",) and key != "default:output"
             self.seuil = SEUIL_VOIX
             self.baisse = None
+            # Lowered only for ONE stream (node:<id>); a whole application
+            # (appli:<name>) has no single node to turn down.
             a_baisser = (int(target.key.split(":", 1)[1])
-                         if self.voix and target.kind == "app" else None)
+                         if self.voix and target.key.startswith("node:") else None)
             self.session, self.src = session, src
             self.etat, self.source, self.cible = "running", entree, cible
             self.lignes = []

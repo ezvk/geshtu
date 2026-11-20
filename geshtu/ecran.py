@@ -21,6 +21,7 @@ import collections
 import dataclasses
 import json
 import pathlib
+import re
 import subprocess
 import threading
 import time
@@ -216,9 +217,12 @@ class Capture:
 
 
 def fenetre(motif: str) -> str:
-    """The foreign-toplevel identifier of the window `motif` names: its app-id
-    exactly, else the first window whose title contains it (any case). "" when
-    none is open. Read with lswt (ext-foreign-toplevel-list-v1)."""
+    """The foreign-toplevel identifier of the window `motif` names, "" when
+    none is open. Read with lswt (ext-foreign-toplevel-list-v1). In order:
+    the app-id exactly; the app-id spelled like the audio stream's program
+    (« Teams for Linux » = teams-for-linux, « Chromium » ⊂ chromium-browser),
+    a meeting title first when the program has several windows; a title.
+    """
     r = subprocess.run(["lswt", "-j"], capture_output=True, text=True, timeout=10)
     if r.returncode != 0:
         raise RuntimeError("lswt: %s" % r.stderr.strip()[:200])
@@ -226,10 +230,28 @@ def fenetre(motif: str) -> str:
     for f in fenetres:
         if f.get("app-id") == motif:
             return f.get("identifier", "")
+    cle = _plat(motif)
+    siennes = [f for f in fenetres
+               if cle and (cle in _plat(f.get("app-id")) or _plat(f.get("app-id")) in cle)
+               and _plat(f.get("app-id"))]
+    for f in siennes:
+        if any(m in (f.get("title") or "").lower() for m in REUNIONS):
+            return f.get("identifier", "")
+    if siennes:
+        return siennes[0].get("identifier", "")
     for f in fenetres:
         if motif.lower() in (f.get("title") or "").lower():
             return f.get("identifier", "")
     return ""
+
+
+# Words a meeting window carries in its title, to pick it among a browser's
+# windows.
+REUNIONS = ("meet", "teams", "zoom", "jitsi", "webex", "whereby", "visio", "réunion")
+
+
+def _plat(texte) -> str:
+    return re.sub(r"[^a-z0-9]", "", (texte or "").lower())
 
 
 def _ecran(t, image):
