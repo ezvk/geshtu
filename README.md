@@ -178,6 +178,33 @@ geshtu model llm mistral-7b    # switch, now, without a restart
 geshtu models add hf:OpenVINO/Mistral-7B-Instruct-v0.3-int4-cw-ov
 ```
 
+### geshtu's own model servers
+
+An engine can also be **served by geshtu itself**: name an OVMS binary and a
+model directory, and the daemon starts the server at the first request that
+needs it, loads the weights then, unloads them after `inactif` seconds and
+stops the process after `arret` seconds without a request. Nothing listens
+between meetings.
+
+```toml
+[serveurs.stable]                               # one server per OVMS version
+ovms  = "/run/current-system/sw/bin/ovms"
+port  = 18194
+cache = true                                    # NPU: no 3-minute recompile
+
+[engines.asr]
+serveur = "stable"
+modele  = "/var/lib/ovmodels/OpenVINO/whisper-large-v3-turbo-int8-ov"
+model   = "whisper"
+device  = "NPU"
+```
+
+The model directory is never written to: geshtu serves its own copy, made of
+links to the files plus its own `graph.pbtxt` (`ovms --configure`, with the
+engine's `options`) and any file it replaces (`fichiers`, e.g. a chat template
+shipped in `geshtu/gabarits`). `geshtu serveurs` shows what runs,
+`geshtu serveurs arret` stops it all now (a game starting, say).
+
 ## Plugins
 
 | kind | does | examples |

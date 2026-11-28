@@ -246,11 +246,10 @@ class Traducteur:
     def _traduit(self, texte: str, entree: str, cible: str) -> str:
         cfg = self.state.cfg
         eng = cfg.engine("llm")
-        moteurs = cfg.raw.get("traduction", {}).get("moteurs", {})
-        choix = moteurs.get(self.state.traducteur_choisi())
+        choix = cfg.traducteur(self.state.traducteur_choisi())
         if choix:
-            eng = dataclasses.replace(eng, endpoint=choix["endpoint"], model=choix["model"])
-            if choix.get("format") == "translategemma":
+            eng = choix
+            if choix.format == "translategemma":
                 return self._translategemma(eng, texte, entree, cible)
         else:
             # Before named translators: a bare [traduction] model on the llm engine.

@@ -58,7 +58,7 @@ include = ["geshtu*"]
 # Les icones voyagent avec le paquet : le tray en donne le chemin absolu a
 # l hote, qui ne resout alors aucun nom de theme.
 [tool.setuptools.package-data]
-geshtu = ["icons/*.svg"]
+geshtu = ["icons/*.svg", "gabarits/*"]
 
 [tool.flake8]
 max-line-length = 100

@@ -163,6 +163,28 @@ stages = ["diarise", "transcribe", "ecrans"]
 # ne lie l'audio que s'il existe déjà.
 sinks = ["mp3", "markdown"]
 
+# geshtu's own model servers (geshtu/serveur.py). An engine with `serveur` and
+# `modele` is served by geshtu itself: the OVMS process starts at the first
+# request that needs it and stops after `arret` seconds without one; a model's
+# weights unload after `inactif` seconds (OVMS --idle_unload_timeout_seconds).
+# One server per OVMS VERSION (it serves every device): utu runs Whisper on the
+# stable (5x faster on the NPU) and LFM3-VL on a weekly (the only one serving it).
+# [serveurs.stable]
+# ovms = "/run/current-system/sw/bin/ovms"
+# port = 18194
+# inactif = 600          # seconds before a model's weights unload
+# arret = 900            # seconds before the process itself stops
+# cache = true           # --cache_dir: the NPU recompiles Whisper otherwise (~3 min)
+#
+# [engines.asr]
+# serveur = "stable"
+# modele = "/var/lib/ovmodels/OpenVINO/whisper-large-v3-turbo-int8-ov"
+# model = "whisper"
+# device = "NPU"
+# options = ""           # ovms --configure options, e.g. "--reasoning_parser qwen3"
+# fichiers = { "chat_template.jinja" = "geshtu:translategemma.jinja" }
+#                        # files replaced in geshtu's copy; geshtu: = shipped with geshtu
+
 # Dropping a model in a folder and having it served. The server must be
 # started with --config_path <config> --file_system_poll_wait_seconds N,
 # otherwise it never re-reads what geshtu writes here.
@@ -176,8 +198,8 @@ sinks = ["mp3", "markdown"]
 @dataclasses.dataclass
 class Engine:
     name: str
-    endpoint: str
-    model: str
+    endpoint: str = ""
+    model: str = ""
     device: str = "CPU"
     max_prompt: int | None = None
     timeout: float = 600.0
@@ -185,6 +207,30 @@ class Engine:
     # asr engine reads it: "" = Whisper's multipart /audio/transcriptions,
     # "omni" = an omni-modal model behind /chat/completions (engines.transcribe).
     format: str = ""
+    # A MANAGED engine (geshtu/serveur.py): geshtu starts the [serveurs.<serveur>]
+    # OVMS itself and serves `modele` (a model directory, never written to) under
+    # the name `model`. Its endpoint is derived from the server's port and the task.
+    serveur: str = ""
+    modele: str = ""
+    tache: str = ""                 # empty = the task this engine's stage calls
+    options: str = ""               # passed to ovms --configure, e.g. "--pooling LAST"
+    fichiers: dict = dataclasses.field(default_factory=dict)   # name -> replacement file
+
+
+def engine(name: str, raw: dict, fields: dict) -> Engine:
+    """An Engine from its table, with a managed one's endpoint filled in."""
+    from geshtu import serveur
+    eng = Engine(name=name, **fields)
+    if eng.serveur:
+        port = raw.get("serveurs", {}).get(eng.serveur, {}).get("port")
+        if port is None:
+            raise SystemExit("[engines.%s] serveur = %r, but no [serveurs.%s] with a port"
+                             % (name, eng.serveur, eng.serveur))
+        tache = eng.tache or serveur.TACHES.get(name, "text_generation")
+        # ⚠️ ALWAYS DERIVED, never the table's: the built-in defaults give every
+        # engine an endpoint, and a merged one would point at the old service.
+        eng = dataclasses.replace(eng, tache=tache, endpoint=serveur.endpoint(port, tache))
+    return eng
 
 
 @dataclasses.dataclass
@@ -204,6 +250,19 @@ class Config:
             raise SystemExit(
                 "no engine named %r; declare [engines.%s] in the config" % (name, name))
 
+    def traducteur(self, nom: str) -> Engine | None:
+        """[traduction.moteurs.<nom>] as an engine: the llm engine's settings, with
+        the translator's own endpoint and model -- or its own managed model."""
+        choix = self.raw.get("traduction", {}).get("moteurs", {}).get(nom)
+        if not choix:
+            return None
+        base = self.engines.get("llm") or Engine(name="llm")
+        champs = {f.name: getattr(base, f.name) for f in dataclasses.fields(Engine)
+                  if f.name not in ("name", "endpoint", "model", "serveur", "modele", "tache",
+                                    "options", "fichiers", "format")}
+        champs.update(choix)
+        return engine("traduction." + nom, self.raw, champs)
+
     def with_models(self, chosen: dict, endpoints: dict | None = None) -> "Config":
         """A copy of this config with some engines pointed at another model.
 
@@ -218,12 +277,16 @@ class Config:
             return self
         engines = {}
         for name, eng in self.engines.items():
-            if chosen.get(name):
+            # ⚠️ NOT FOR A MANAGED ENGINE: its name is the one geshtu serves its
+            # `modele` under, and another name would be asked of a server that
+            # has no such model.
+            if chosen.get(name) and not eng.serveur:
                 eng = dataclasses.replace(eng, model=chosen[name])
             # Same reasoning for WHERE the model runs: a server started by
             # hand (Jan's llama, a test box) is runtime state, not config.
+            # Pointing a managed engine elsewhere takes it out of geshtu's hands.
             if endpoints.get(name):
-                eng = dataclasses.replace(eng, endpoint=endpoints[name])
+                eng = dataclasses.replace(eng, endpoint=endpoints[name], serveur="")
             engines[name] = eng
         return dataclasses.replace(self, engines=engines)
 
@@ -245,7 +308,7 @@ def load(explicit: pathlib.Path | None = None) -> Config:
         sessions=pathlib.Path(sessions).expanduser() if sessions else data / "geshtu",
         rate=raw["capture"]["rate"],
         channels=raw["capture"]["channels"],
-        engines={k: Engine(name=k, **v) for k, v in raw.get("engines", {}).items()},
+        engines={k: engine(k, raw, v) for k, v in raw.get("engines", {}).items()},
         stages=raw["pipeline"]["stages"],
         sinks=raw["pipeline"]["sinks"],
         raw=raw,

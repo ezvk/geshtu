@@ -22,6 +22,8 @@ USAGE = """geshtu — self-hosted meeting intelligence
   geshtu model <engine> <name>     point an engine at another model
   geshtu models add <dir|hf:id>    serve a model dropped in the repository
   geshtu models remove <name>      stop serving it
+  geshtu serveurs                  geshtu's own model servers, and what they hold
+  geshtu serveurs arret            stop them now (they restart at the next request)
   geshtu dictee                     press once to start, again to type
   geshtu commande                   press once to start, again to execute
   geshtu lire                      read the selected text aloud (Kokoro);
@@ -249,6 +251,19 @@ def main(argv: list[str] | None = None) -> int:
                 note = "" if m["state"] == "AVAILABLE" else "  (%s)" % m["state"]
                 print("      %-32s%s%s" % (m["name"], note, mark))
         return 0
+
+    if cmd == "serveurs":
+        if rest[:1] == ["arret"]:
+            r = call({"cmd": "serveurs", "action": "arret", "pourquoi": " ".join(rest[1:])})
+            print("stopped: %s" % (", ".join(r.get("arretes") or []) or "none was running"))
+            return 0 if r.get("ok") else 1
+        r = call({"cmd": "serveurs"})
+        for s in r.get("serveurs", []):
+            marche = "running" if s["actif"] else "stopped"
+            print("  %-8s :%-5d %s  %s" % (s["serveur"], s["port"], marche, s["ovms"]))
+            for nom in s["declares"]:
+                print("      %-24s %s" % (nom, s["modeles"].get(nom, "")))
+        return 0 if r.get("ok") else 1
 
     if cmd == "model":
         if len(rest) < 2:

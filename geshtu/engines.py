@@ -9,6 +9,8 @@ import urllib.request
 import re
 import uuid
 
+from geshtu import serveur
+
 
 def endpoint_for(saisie: str, configured: str) -> str:
     """The address typed in the window, made into a full endpoint.
@@ -42,6 +44,13 @@ def available(engine) -> list[dict]:
     while it is still compiling for an accelerator. The state is returned
     alongside the name rather than filtered out, so the caller can say so.
     """
+    if getattr(engine, "serveur", ""):
+        # ⚠️ NOT STARTED TO BE LISTED. A managed server runs only while a stage
+        # needs it (serveur.py): asking what it serves must not load anything.
+        gestion = serveur.GESTION
+        etats = gestion.de(engine).etats() if gestion else {}
+        return [{"name": engine.model,
+                 "state": etats.get(engine.model) or "on demand (geshtu, %s)" % engine.serveur}]
     base = engine.endpoint.split("/v1/")[0].split("/v3/")[0].rstrip("/")
     try:
         with urllib.request.urlopen(base + "/v1/config", timeout=10) as resp:
@@ -107,7 +116,8 @@ def transcribe(engine, path: pathlib.Path, language: str | None = None) -> str:
     req = urllib.request.Request(
         engine.endpoint, data=bytes(body),
         headers={"Content-Type": "multipart/form-data; boundary=" + boundary})
-    with urllib.request.urlopen(req, timeout=engine.timeout) as resp:
+    with serveur.utilise(engine), \
+            urllib.request.urlopen(req, timeout=engine.timeout) as resp:
         return nettoie((json.loads(resp.read()).get("text") or "").strip())
 
 
@@ -144,7 +154,8 @@ def _transcribe_omni(engine, path: pathlib.Path, language: str | None) -> str:
     req = urllib.request.Request(
         engine.endpoint, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=engine.timeout) as resp:
+    with serveur.utilise(engine), \
+            urllib.request.urlopen(req, timeout=engine.timeout) as resp:
         out = json.loads(resp.read())
     texte = ((out.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     # The model is non-reasoning but its template opens every answer with an
@@ -174,7 +185,8 @@ def read_image(engine, image: pathlib.Path, prompt: str, system: str = "",
     req = urllib.request.Request(
         engine.endpoint, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=engine.timeout) as resp:
+    with serveur.utilise(engine), \
+            urllib.request.urlopen(req, timeout=engine.timeout) as resp:
         out = json.loads(resp.read())
     texte = ((out.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     return texte.replace("<think>", "").replace("</think>", "").strip()
@@ -211,7 +223,8 @@ def chat(engine, prompt: str, system: str = "", max_tokens: int = 1100,
     req = urllib.request.Request(
         engine.endpoint, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=engine.timeout) as resp:
+    with serveur.utilise(engine), \
+            urllib.request.urlopen(req, timeout=engine.timeout) as resp:
         out = json.loads(resp.read())
     choice = (out.get("choices") or [{}])[0]
     # ⚠️ `length` means the answer was CUT. Concluding anything from a
@@ -232,7 +245,8 @@ def embed(engine, texts: list[str]) -> list[list[float]]:
     req = urllib.request.Request(
         engine.endpoint, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=engine.timeout) as resp:
+    with serveur.utilise(engine), \
+            urllib.request.urlopen(req, timeout=engine.timeout) as resp:
         out = json.loads(resp.read())
     return [d["embedding"] for d in out.get("data", [])]
 
@@ -248,7 +262,8 @@ def speak(engine, text: str, voice: str, language: str) -> bytes:
     req = urllib.request.Request(
         engine.endpoint, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=engine.timeout) as resp:
+    with serveur.utilise(engine), \
+            urllib.request.urlopen(req, timeout=engine.timeout) as resp:
         return resp.read()
 
 

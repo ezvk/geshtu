@@ -41,6 +41,7 @@ from geshtu import direct
 from geshtu import models
 from geshtu import pipeline
 from geshtu import plugins
+from geshtu import serveur
 
 
 def socket_path() -> pathlib.Path:
@@ -75,6 +76,8 @@ class State:
         self.lecteur = lecture.Lecteur(self)
         self.traducteur = traduction.Traducteur(self)
         self.direct = direct.Direct(self)
+        # geshtu's own model servers, started when a request needs one (serveur.py).
+        serveur.GESTION = serveur.Serveurs(cfg, report=self.report)
         self.capture_ecran = None          # ecran.Capture while recording, if [ecran] actif
         self.derniere = None          # the last recording stopped, for `noms`
         threading.Thread(target=self._worker, daemon=True).start()
@@ -111,7 +114,7 @@ class State:
             return {"ok": False, "error": "no engine named %r" % engine}
         configured = self.cfg.engines[engine].endpoint
         url = engines.endpoint_for(saisie, configured)
-        trial = dataclasses.replace(self.active().engines[engine], endpoint=url)
+        trial = dataclasses.replace(self.active().engines[engine], endpoint=url, serveur="")
         # ⚠️ PROBED BEFORE IT IS KEPT. A typo would otherwise sit there until
         # the next meeting's summary fails, an hour later, with the room gone.
         try:
@@ -812,6 +815,11 @@ class Handler(socketserver.StreamRequestHandler):
             return st.set_model(msg["engine"], msg["model"])
         if cmd == "set-endpoint":
             return st.set_endpoint(msg["engine"], msg.get("endpoint", ""))
+        if cmd == "serveurs":
+            if msg.get("action") == "arret":
+                arretes = serveur.GESTION.arrete_tout(msg.get("pourquoi") or "asked")
+                return {"ok": True, "arretes": arretes}
+            return {"ok": True, "serveurs": serveur.GESTION.etat()}
         if cmd == "ping":
             return {"ok": True}
         return {"ok": False, "error": "unknown command %r" % cmd}
@@ -855,6 +863,7 @@ def main() -> int:
             pass
         finally:
             Handler.state.traducteur.stop()
+            serveur.GESTION.arrete_tout("daemon stopping")
     path.unlink(missing_ok=True)
     return 0
 

@@ -1,0 +1,13 @@
+{{- bos_token -}}
+{%- set loop_messages = messages -%}
+{%- if messages and messages[0]['role'] == 'system' -%}
+{{- '<|turn>system\n' + messages[0]['content'] | trim + '<turn|>\n' -}}
+{%- set loop_messages = messages[1:] -%}
+{%- endif -%}
+{%- for message in loop_messages -%}
+{%- set role = 'model' if message['role'] == 'assistant' else message['role'] -%}
+{{- '<|turn>' + role + '\n' + message['content'] | trim + '<turn|>\n' -}}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+{{- '<|turn>model\n' -}}
+{%- endif -%}
