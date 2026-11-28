@@ -67,6 +67,9 @@ TACHES = {"asr": "speech2text", "tts": "text2speech", "embed": "embeddings"}
 
 GABARITS = pathlib.Path(__file__).parent / "gabarits"
 
+# Seconds between SIGTERM and SIGKILL when stopping a server.
+ARRET_GRACE = 15
+
 
 def endpoint(port: int, tache: str) -> str:
     return "http://127.0.0.1:%d%s" % (int(port), ROUTES[tache])
@@ -211,12 +214,21 @@ class Serveur:
         with self.lock:
             if not self.vivant():
                 return False
+            # ⚠️ OVMS TAKES MORE THAN 10 s TO HONOUR SIGTERM (measured on utu,
+            # 2026-11-28, both versions), and one stuck loading a model on the GPU
+            # outlived the whole essai: SIGKILL after a grace, and never raise --
+            # this runs in the daemon's finally and in pause-ia's path.
             self.proc.terminate()
             try:
-                self.proc.wait(15)
+                self.proc.wait(ARRET_GRACE)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
-                self.proc.wait(5)
+                try:
+                    self.proc.wait(30)
+                except subprocess.TimeoutExpired:
+                    self.report("server %s: pid %d still alive after SIGKILL"
+                                % (self.nom, self.proc.pid))
+                    return False
             self.report("server %s: stopped%s" % (self.nom, " (%s)" % pourquoi if pourquoi else ""))
             return True
 
